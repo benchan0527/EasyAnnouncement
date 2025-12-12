@@ -1,10 +1,5 @@
-# EasyAnnouncement Download
+# releases EasyAnnouncement Download
 ## [releases](https://github.com/botamochi129/EasyAnnouncement/releases)
-
-# 🚄 MTR Integration
-EasyAnnouncement now features intelligent MTR mod integration! See [MTR_INTEGRATION_GUIDE.md](MTR_INTEGRATION_GUIDE.md) for details.
-
----
 
 # Usage Guide
 
@@ -49,7 +44,7 @@ Create a JSON file and refer to the following example:
 
 ### 2. MTR-specific JSON Example
 
-**For Hong Kong MTR-style announcements:**
+**added announcements:**
 ```json
 {
   "sounds": [
@@ -160,30 +155,7 @@ resource_pack_name/
 
 ### 3. sounds.json Example
 
-```json
-{
-  "mamonaku": {
-    "category": "voice",
-    "sounds": ["easyannouncement:sounds/mamonaku"]
-  },
-  "mairimasu": {
-    "category": "voice", 
-    "sounds": ["easyannouncement:sounds/mairimasu"]
-  },
-  "mtr_chime": {
-    "category": "voice",
-    "sounds": ["easyannouncement:sounds/mtr_chime"]
-  },
-  "attention_please_chi": {
-    "category": "voice",
-    "sounds": ["easyannouncement:sounds/attention_please_chi"]
-  },
-  "attention_please_eng": {
-    "category": "voice",
-    "sounds": ["easyannouncement:sounds/attention_please_eng"]
-  }
-}
-```
+`
 
 ## 🎮 In-Game Setup
 
@@ -208,24 +180,6 @@ resource_pack_name/
 **Default announcement on failure:**
 - Default announcement plays
 
-## 🚄 MTR Integration Features
-
-With the new MTR integration features, you can now:
-
-### Real-time Information
-- ⏰ Current time
-- 🚉 Station information
-- 🚆 Train status
-- 📅 Schedule information
-
-### Smart Announcement Examples
-
-**English Example:**
-```
-Current time is 14:25, welcome to Central Station, Zone 1.
-Upcoming trains: Tsuen Wan line to Tsuen Wan, arriving in 2 minutes, 8 cars.
-Please mind the platform gap and give way to alighting passengers.
-```
 
 For details, see [MTR_INTEGRATION_GUIDE.md](MTR_INTEGRATION_GUIDE.md).
 
