@@ -1,0 +1,36 @@
+# Gradle
+.gradle/
+build/
+!build/resources/
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.classpath
+.project
+.settings/
+bin/
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Minecraft/Fabric
+run/
+logs/
+*.log
+crash-reports/
+debug.log
+latest.log
+
+# Gradle Wrapper (optional - some projects include it, some don't)
+# Uncomment if you want to ignore the wrapper
+# gradle-wrapper.jar
+# gradle-wrapper.properties
+
