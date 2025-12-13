@@ -1,5 +1,5 @@
 # releases EasyAnnouncement Download
-## [releases](https://github.com/botamochi129/EasyAnnouncement/releases)
+## [prereleases](https://github.com/benchan0527/EasyAnnouncement/releases/tag/beta)
 
 # Usage Guide
 

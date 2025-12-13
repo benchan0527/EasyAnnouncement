@@ -16,7 +16,6 @@ import net.minecraft.client.sound.PositionedSoundInstance;
 import net.minecraft.client.sound.SoundInstance;
 import net.minecraft.client.sound.SoundManager;
 import net.minecraft.resource.Resource;
-import net.minecraft.sound.SoundCategory;
 import net.minecraft.sound.SoundEvent;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.registry.Registry;
@@ -27,13 +26,15 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class AnnounceReceiveFromServer {
     public static final Identifier ID = new Identifier(Easyannouncement.MOD_ID, "announce_update");
     public static final Identifier ANNOUNCE_START_ID = new Identifier(Easyannouncement.MOD_ID, "announce_start");
     
     private static final long MIN_ANNOUNCE_INTERVAL = 500; // 例: 500 ミリ秒間隔
-    private static final Map<BlockPos, Long> lastAnnounceTime = new HashMap<>();
+    // 使用 ConcurrentHashMap 以確保線程安全
+    private static final Map<BlockPos, Long> lastAnnounceTime = new ConcurrentHashMap<>();
 
     
 
@@ -351,7 +352,6 @@ public class AnnounceReceiveFromServer {
         
         // Sanitize: remove spaces and the characters < > ? , . ( )
         // Preserve namespace separator ':' if present at the start of the identifier
-        boolean hasNamespace = formattedSoundPath.contains(":");
         formattedSoundPath = formattedSoundPath.replaceAll("[ <>?,.()]", "");
         
         // If namespaced, ensure the ':' remains (it will unless it was surrounded by filtered chars)
@@ -368,10 +368,16 @@ public class AnnounceReceiveFromServer {
         SoundManager soundManager = client.getSoundManager();
         Random random = Random.create();
 
-        new Thread(() -> {
+        Thread playbackThread = new Thread(() -> {
             try {
                 for (SoundData soundData : soundDataList) {
+                    // 檢查是否被中斷
+                    if (Thread.currentThread().isInterrupted()) {
+                        break;
+                    }
+                    
                     String finalSoundPath = soundData.soundPath;
+                    double duration = soundData.duration;
                     
                     // Parse sound ID
                     Identifier soundId;
@@ -379,6 +385,15 @@ public class AnnounceReceiveFromServer {
                         soundId = Identifier.tryParse(finalSoundPath);
                         if (soundId == null) {
                             System.err.println("[EasyAnnouncement] Invalid sound ID: " + finalSoundPath);
+                            // 如果 duration > 0，即使聲音無效也要等待，以保持時序
+                            if (duration > 0) {
+                                try {
+                                    Thread.sleep((long)(duration * 1000));
+                                } catch (InterruptedException e) {
+                                    Thread.currentThread().interrupt();
+                                    break;
+                                }
+                            }
                             continue;
                         }
                     } else {
@@ -391,7 +406,16 @@ public class AnnounceReceiveFromServer {
                         try {
                             soundEvent = new SoundEvent(soundId);
                         } catch (Exception e) {
-                            System.err.println("[EasyAnnouncement] Failed to play sound: " + soundId);
+                            System.err.println("[EasyAnnouncement] Failed to create sound event: " + soundId);
+                            // 如果 duration > 0，即使聲音創建失敗也要等待，以保持時序
+                            if (duration > 0) {
+                                try {
+                                    Thread.sleep((long)(duration * 1000));
+                                } catch (InterruptedException ie) {
+                                    Thread.currentThread().interrupt();
+                                    break;
+                                }
+                            }
                             continue;
                         }
                     }
@@ -406,38 +430,102 @@ public class AnnounceReceiveFromServer {
                         false
                     );
 
-                    client.submit(() -> {
-                        try {
-                            soundManager.play(instance);
-                        } catch (Exception e) {
-                            System.err.println("[EasyAnnouncement] Playback failed: " + e.getMessage());
+                    boolean playSuccess = false;
+                    try {
+                        client.submit(() -> {
+                            try {
+                                soundManager.play(instance);
+                            } catch (Exception e) {
+                                System.err.println("[EasyAnnouncement] Playback failed: " + e.getMessage());
+                            }
+                        }).get(); // 等待提交完成
+                        playSuccess = true;
+                    } catch (Exception e) {
+                        System.err.println("[EasyAnnouncement] Failed to submit sound playback: " + e.getMessage());
+                    }
+
+                    if (!playSuccess) {
+                        // 播放失敗，如果 duration > 0 則等待指定時間
+                        if (duration > 0) {
+                            try {
+                                Thread.sleep((long)(duration * 1000));
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                break;
+                            }
                         }
-                    });
+                        continue;
+                    }
 
-                    // Wait for sound to start
+                    // Wait for sound to start (最多等待 200ms)
                     long registerStart = System.currentTimeMillis();
-                    while (!soundManager.isPlaying(instance) && System.currentTimeMillis() - registerStart < 100) {
-                        Thread.sleep(5);
+                    boolean soundStarted = false;
+                    while (!soundManager.isPlaying(instance) && System.currentTimeMillis() - registerStart < 200) {
+                        Thread.sleep(10);
                     }
+                    soundStarted = soundManager.isPlaying(instance);
                     
-                    if (!soundManager.isPlaying(instance)) {
+                    if (!soundStarted) {
                         System.err.println("[EasyAnnouncement] Sound failed to start: " + soundId);
+                        // 如果聲音未啟動但 duration > 0，等待指定時間
+                        if (duration > 0) {
+                            try {
+                                Thread.sleep((long)(duration * 1000));
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                break;
+                            }
+                        }
+                        continue;
                     }
 
-                    // Wait for sound to finish
+                    // 使用 duration 和實際播放時間的混合策略
                     long playStart = System.currentTimeMillis();
-                    int safetyMillis = 30000;
-                    while (soundManager.isPlaying(instance)) {
-                        Thread.sleep(50);
-                        if (System.currentTimeMillis() - playStart > safetyMillis) {
-                            break;
+                    long durationMillis = duration > 0 ? (long)(duration * 1000) : 0;
+                    int safetyMillis = Math.max(30000, durationMillis > 0 ? (int)durationMillis + 5000 : 30000); // 至少等待 duration + 5秒安全邊界
+                    
+                    // 如果 duration > 0，使用 duration 作為主要等待時間，但同時監聽實際播放狀態
+                    if (duration > 0) {
+                        // 等待 duration 時間，但同時檢查聲音是否還在播放
+                        long elapsed = 0;
+                        while (elapsed < durationMillis && soundManager.isPlaying(instance)) {
+                            Thread.sleep(50);
+                            elapsed = System.currentTimeMillis() - playStart;
+                            if (Thread.currentThread().isInterrupted()) {
+                                break;
+                            }
+                        }
+                        // 如果 duration 時間已過但聲音還在播放，繼續等待（但有限制）
+                        if (soundManager.isPlaying(instance) && elapsed < safetyMillis) {
+                            // 額外等待最多 2 秒，確保聲音完整播放
+                            long extraWait = Math.min(2000, safetyMillis - elapsed);
+                            if (extraWait > 0) {
+                                Thread.sleep(extraWait);
+                            }
+                        }
+                    } else {
+                        // duration = 0 或未設定，使用實際播放時間
+                        while (soundManager.isPlaying(instance)) {
+                            Thread.sleep(50);
+                            if (System.currentTimeMillis() - playStart > safetyMillis) {
+                                System.err.println("[EasyAnnouncement] Sound playback timeout: " + soundId);
+                                break;
+                            }
+                            if (Thread.currentThread().isInterrupted()) {
+                                break;
+                            }
                         }
                     }
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+            } catch (Exception e) {
+                System.err.println("[EasyAnnouncement] Unexpected error in sound playback: " + e.getMessage());
+                e.printStackTrace();
             }
-        }, "EA-SeqSoundPlayer").start();
+        }, "EA-SeqSoundPlayer");
+        playbackThread.setDaemon(true); // 設為 daemon 線程，不會阻止 JVM 關閉
+        playbackThread.start();
     }
     
     	private static void playMultiJsonAnnouncements(MinecraftClient client, BlockPos pos, List<AnnouncementEntry> announcementEntries, AnnouncementContext context) {
@@ -503,16 +591,17 @@ public class AnnounceReceiveFromServer {
 		final float finalVolume = volume;
 		final SoundInstance.AttenuationType finalAttenuationType = attenuationType;
         
-        for (int i = 0; i < announcementEntries.size(); i++) {
-            AnnouncementEntry entry = announcementEntries.get(i);
-        }
-        
         		// Schedule announcements using absolute time from broadcast start
-		new Thread(() -> {
+		Thread schedulerThread = new Thread(() -> {
 			try {
 				long startTime = System.currentTimeMillis();
 				
 				for (int i = 0; i < announcementEntries.size(); i++) {
+					// 檢查是否被中斷
+					if (Thread.currentThread().isInterrupted()) {
+						break;
+					}
+					
 					AnnouncementEntry entry = announcementEntries.get(i);
 					if (entry.isEmpty()) continue;
 					
@@ -522,24 +611,48 @@ public class AnnounceReceiveFromServer {
 					long waitTime = targetTime - currentTime;
 					
 					if (waitTime > 0) {
-						Thread.sleep(waitTime);
+						// 分段等待，以便能夠響應中斷
+						long remainingWait = waitTime;
+						while (remainingWait > 0 && !Thread.currentThread().isInterrupted()) {
+							long sleepTime = Math.min(remainingWait, 100); // 每次最多等待 100ms
+							Thread.sleep(sleepTime);
+							remainingWait = targetTime - System.currentTimeMillis();
+						}
 					} else if (waitTime < -1000) {
 						System.err.println("[EasyAnnouncement] Warning: Entry " + (i + 1) + " is " + 
 						                   String.format("%.1f", Math.abs(waitTime) / 1000.0) + "s behind schedule");
 					}
 					
+					// 再次檢查中斷狀態
+					if (Thread.currentThread().isInterrupted()) {
+						break;
+					}
+					
 					List<SoundData> soundDataList = loadAnnouncementSequence(entry.getJsonName(), context);
+					
+					// 如果載入失敗，跳過這個 entry
+					if (soundDataList == null || soundDataList.isEmpty()) {
+						System.err.println("[EasyAnnouncement] Warning: Entry " + (i + 1) + " (" + entry.getJsonName() + ") has no sounds, skipping");
+						continue;
+					}
 					
 					// Play in a separate thread so it doesn't block the scheduler
 					final List<SoundData> finalSoundDataList = new ArrayList<>(soundDataList);
-					new Thread(() -> {
+					Thread entryThread = new Thread(() -> {
 						playAnnouncementSounds(client, pos, finalSoundDataList, finalVolume, finalAttenuationType);
-					}, "EA-Entry-" + (i + 1)).start();
+					}, "EA-Entry-" + (i + 1));
+					entryThread.setDaemon(true); // 設為 daemon 線程
+					entryThread.start();
 				}
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
+			} catch (Exception e) {
+				System.err.println("[EasyAnnouncement] Unexpected error in announcement scheduler: " + e.getMessage());
+				e.printStackTrace();
 			}
-		}, "EA-MultiJsonScheduler").start();
+		}, "EA-MultiJsonScheduler");
+		schedulerThread.setDaemon(true); // 設為 daemon 線程
+		schedulerThread.start();
     }
 
     	private static String getPlatformName(AnnouncementContext context) {

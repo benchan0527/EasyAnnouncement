@@ -201,7 +201,9 @@ public class AnnounceTile extends BlockEntity implements ExtendedScreenHandlerFa
                     break;
                 case "EXACT":
                 default:
-                    conditionMet = ticksUntilArrival == threshold;
+                    // 使用範圍比較而非精確匹配，避免時間精度問題
+                    // 允許 ±1 tick 的誤差範圍
+                    conditionMet = Math.abs(ticksUntilArrival - threshold) <= 1;
             }
             if (conditionMet && lastTriggeredArrivalMillis != next.arrivalMillis) {
                 if (currentTime - lastAnnounceTriggerTime >= MIN_TRIGGER_INTERVAL) {
