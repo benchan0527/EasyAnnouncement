@@ -421,6 +421,10 @@ public class AnnounceReceiveFromServer {
                             }
                         }).get(); // 等待提交完成
                         playSuccess = true;
+                    } catch (InterruptedException e) {
+                        // 重新設置中斷狀態，保持線程取消機制
+                        Thread.currentThread().interrupt();
+                        break; // 中斷時退出循環
                     } catch (Exception e) {
                         System.err.println("[EasyAnnouncement] Failed to submit sound playback: " + e.getMessage());
                     }
