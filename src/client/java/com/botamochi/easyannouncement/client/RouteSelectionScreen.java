@@ -138,14 +138,30 @@ public class RouteSelectionScreen extends Screen {
 		if (world != null) {
 			BlockEntity blockEntity = world.getBlockEntity(blockPos);
 			if (blockEntity instanceof AnnounceTile announceTile) {
+				// Build the platform list according to selected routes, but keep any explicitly preselected platforms
 				Set<Long> platformIds = new HashSet<>();
-				for (Platform platform : platformsAtStation) {
-					List<ClientCache.PlatformRouteDetails> prds = ClientData.DATA_CACHE.requestPlatformIdToRoutes(platform.id);
-					boolean servedBySelectedRoute = prds.stream().anyMatch(prd -> selectedRouteColors.contains(prd.routeColor));
-					if (servedBySelectedRoute) {
-						platformIds.add(platform.id);
+
+				if (selectedRouteColors.isEmpty()) {
+					// No new route chosen: keep the platforms the player already selected
+					platformIds.addAll(preselectedPlatformIds);
+				} else {
+					for (Platform platform : platformsAtStation) {
+						List<ClientCache.PlatformRouteDetails> prds = ClientData.DATA_CACHE.requestPlatformIdToRoutes(platform.id);
+						boolean servedBySelectedRoute = prds.stream().anyMatch(prd -> selectedRouteColors.contains(prd.routeColor));
+						if (servedBySelectedRoute) {
+							platformIds.add(platform.id);
+						}
+					}
+					// If the player had narrowed down specific platforms earlier, intersect to avoid pulling in every platform on the same line
+					if (preselectedPlatformIds != null && !preselectedPlatformIds.isEmpty()) {
+						platformIds.retainAll(preselectedPlatformIds);
+						if (platformIds.isEmpty()) {
+							// Fallback so we never wipe the selection when the intersection is empty
+							platformIds.addAll(preselectedPlatformIds);
+						}
 					}
 				}
+
 				announceTile.setSelectedPlatformIds(new ArrayList<>(platformIds));
 				int seconds = announceTile.getSeconds();
 				var entries = announceTile.getAnnouncementEntries();

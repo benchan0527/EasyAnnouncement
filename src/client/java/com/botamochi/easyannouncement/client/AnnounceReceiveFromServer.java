@@ -377,7 +377,6 @@ public class AnnounceReceiveFromServer {
                     }
                     
                     String finalSoundPath = soundData.soundPath;
-                    double duration = soundData.duration;
                     
                     // Parse sound ID
                     Identifier soundId;
@@ -385,15 +384,6 @@ public class AnnounceReceiveFromServer {
                         soundId = Identifier.tryParse(finalSoundPath);
                         if (soundId == null) {
                             System.err.println("[EasyAnnouncement] Invalid sound ID: " + finalSoundPath);
-                            // 如果 duration > 0，即使聲音無效也要等待，以保持時序
-                            if (duration > 0) {
-                                try {
-                                    Thread.sleep((long)(duration * 1000));
-                                } catch (InterruptedException e) {
-                                    Thread.currentThread().interrupt();
-                                    break;
-                                }
-                            }
                             continue;
                         }
                     } else {
@@ -407,15 +397,6 @@ public class AnnounceReceiveFromServer {
                             soundEvent = new SoundEvent(soundId);
                         } catch (Exception e) {
                             System.err.println("[EasyAnnouncement] Failed to create sound event: " + soundId);
-                            // 如果 duration > 0，即使聲音創建失敗也要等待，以保持時序
-                            if (duration > 0) {
-                                try {
-                                    Thread.sleep((long)(duration * 1000));
-                                } catch (InterruptedException ie) {
-                                    Thread.currentThread().interrupt();
-                                    break;
-                                }
-                            }
                             continue;
                         }
                     }
@@ -445,15 +426,6 @@ public class AnnounceReceiveFromServer {
                     }
 
                     if (!playSuccess) {
-                        // 播放失敗，如果 duration > 0 則等待指定時間
-                        if (duration > 0) {
-                            try {
-                                Thread.sleep((long)(duration * 1000));
-                            } catch (InterruptedException e) {
-                                Thread.currentThread().interrupt();
-                                break;
-                            }
-                        }
                         continue;
                     }
 
@@ -467,53 +439,21 @@ public class AnnounceReceiveFromServer {
                     
                     if (!soundStarted) {
                         System.err.println("[EasyAnnouncement] Sound failed to start: " + soundId);
-                        // 如果聲音未啟動但 duration > 0，等待指定時間
-                        if (duration > 0) {
-                            try {
-                                Thread.sleep((long)(duration * 1000));
-                            } catch (InterruptedException e) {
-                                Thread.currentThread().interrupt();
-                                break;
-                            }
-                        }
                         continue;
                     }
 
-                    // 使用 duration 和實際播放時間的混合策略
+                    // 等待聲音實際播放完成
                     long playStart = System.currentTimeMillis();
-                    long durationMillis = duration > 0 ? (long)(duration * 1000) : 0;
-                    int safetyMillis = Math.max(30000, durationMillis > 0 ? (int)durationMillis + 5000 : 30000); // 至少等待 duration + 5秒安全邊界
+                    int safetyMillis = 30000; // 30秒安全超時
                     
-                    // 如果 duration > 0，使用 duration 作為主要等待時間，但同時監聽實際播放狀態
-                    if (duration > 0) {
-                        // 等待 duration 時間，但同時檢查聲音是否還在播放
-                        long elapsed = 0;
-                        while (elapsed < durationMillis && soundManager.isPlaying(instance)) {
-                            Thread.sleep(50);
-                            elapsed = System.currentTimeMillis() - playStart;
-                            if (Thread.currentThread().isInterrupted()) {
-                                break;
-                            }
+                    while (soundManager.isPlaying(instance)) {
+                        Thread.sleep(50);
+                        if (System.currentTimeMillis() - playStart > safetyMillis) {
+                            System.err.println("[EasyAnnouncement] Sound playback timeout: " + soundId);
+                            break;
                         }
-                        // 如果 duration 時間已過但聲音還在播放，繼續等待（但有限制）
-                        if (soundManager.isPlaying(instance) && elapsed < safetyMillis) {
-                            // 額外等待最多 2 秒，確保聲音完整播放
-                            long extraWait = Math.min(2000, safetyMillis - elapsed);
-                            if (extraWait > 0) {
-                                Thread.sleep(extraWait);
-                            }
-                        }
-                    } else {
-                        // duration = 0 或未設定，使用實際播放時間
-                        while (soundManager.isPlaying(instance)) {
-                            Thread.sleep(50);
-                            if (System.currentTimeMillis() - playStart > safetyMillis) {
-                                System.err.println("[EasyAnnouncement] Sound playback timeout: " + soundId);
-                                break;
-                            }
-                            if (Thread.currentThread().isInterrupted()) {
-                                break;
-                            }
+                        if (Thread.currentThread().isInterrupted()) {
+                            break;
                         }
                     }
                 }

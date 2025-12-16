@@ -8,7 +8,6 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.screen.ingame.HandledScreen;
 import net.minecraft.client.gui.screen.ingame.ScreenHandlerProvider;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.CheckboxWidget;
@@ -20,7 +19,6 @@ import net.minecraft.network.PacketByteBuf;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.MathHelper;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -33,7 +31,6 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
     // Sound configuration widgets
     private SliderWidget volumeSlider;
     private SliderWidget rangeSlider;
-    private ButtonWidget attenuationButton;
     private String currentAttenuationType = "LINEAR";
     private float currentVolume = 2.0F;
     private int currentRange = 64;
@@ -138,8 +135,8 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
 
         // Sound Configuration Section
         if (announceTile != null) {
-            // Initialize current values
-            currentAttenuationType = "LINEAR";
+            // Initialize current values from tile
+            currentAttenuationType = announceTile.getAttenuationType();
             currentVolume = announceTile.getSoundVolume();
             currentRange = announceTile.getSoundRange();
             
@@ -248,33 +245,72 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
                     int seconds = Integer.parseInt(secondsField.getText());
                     List<AnnouncementEntry> entries = announceTile.getAnnouncementEntries();
                     
-                    // Parse XYZ coordinates with null checks
-                    int startX = announceTile.getStartX(); // Default values
+                    // Read slider values - use cached values which are updated by sliders' applyValue() methods
+                    // If sliders exist but haven't been interacted with, cached values match tile values (initialized correctly)
+                    // If sliders have been interacted with, applyValue() has updated the cached values
+                    float volume = currentVolume;
+                    int range = currentRange;
+                    
+                    // Ensure we have valid values (fallback to tile if somehow cache is wrong)
+                    if (volume < 0.1f || volume > 3.0f) {
+                        volume = announceTile.getSoundVolume();
+                    }
+                    if (range < 16 || range > 128) {
+                        range = announceTile.getSoundRange();
+                    }
+                    
+                    // Parse XYZ coordinates - always read from fields if they exist, otherwise use tile values
+                    int startX = announceTile.getStartX();
                     int startY = announceTile.getStartY();
                     int startZ = announceTile.getStartZ();
                     int endX = announceTile.getEndX();
                     int endY = announceTile.getEndY();
                     int endZ = announceTile.getEndZ();
                     
-                    if (startXField != null && startYField != null && startZField != null && 
-                        endXField != null && endYField != null && endZField != null) {
-                        startX = Integer.parseInt(startXField.getText());
-                        startY = Integer.parseInt(startYField.getText());
-                        startZ = Integer.parseInt(startZField.getText());
-                        endX = Integer.parseInt(endXField.getText());
-                        endY = Integer.parseInt(endYField.getText());
-                        endZ = Integer.parseInt(endZField.getText());
-                    }
+                    // Try to parse coordinate fields, use defaults if parsing fails
+                    try {
+                        if (startXField != null && !startXField.getText().isEmpty()) {
+                            startX = Integer.parseInt(startXField.getText());
+                        }
+                    } catch (NumberFormatException ignored) {}
+                    try {
+                        if (startYField != null && !startYField.getText().isEmpty()) {
+                            startY = Integer.parseInt(startYField.getText());
+                        }
+                    } catch (NumberFormatException ignored) {}
+                    try {
+                        if (startZField != null && !startZField.getText().isEmpty()) {
+                            startZ = Integer.parseInt(startZField.getText());
+                        }
+                    } catch (NumberFormatException ignored) {}
+                    try {
+                        if (endXField != null && !endXField.getText().isEmpty()) {
+                            endX = Integer.parseInt(endXField.getText());
+                        }
+                    } catch (NumberFormatException ignored) {}
+                    try {
+                        if (endYField != null && !endYField.getText().isEmpty()) {
+                            endY = Integer.parseInt(endYField.getText());
+                        }
+                    } catch (NumberFormatException ignored) {}
+                    try {
+                        if (endZField != null && !endZField.getText().isEmpty()) {
+                            endZ = Integer.parseInt(endZField.getText());
+                        }
+                    } catch (NumberFormatException ignored) {}
                     
                     boolean boundingBoxEnabled = boundingBoxCheckbox != null ? boundingBoxCheckbox.isChecked() : announceTile.isBoundingBoxEnabled();
-                    sendUpdatePacket(announceTile.getPos(), seconds, selectedPlatforms, entries, currentVolume, currentRange, "LINEAR", boundingBoxEnabled, startX, startY, startZ, endX, endY, endZ, currentTriggerMode);
-                    // データを更新
+                    
+                    // Send update packet with all current values
+                    sendUpdatePacket(announceTile.getPos(), seconds, selectedPlatforms, entries, volume, range, currentAttenuationType, boundingBoxEnabled, startX, startY, startZ, endX, endY, endZ, currentTriggerMode);
+                    
+                    // Also update local tile immediately for responsive UI
                     announceTile.setSeconds(seconds);
                     announceTile.setSelectedPlatformIds(selectedPlatforms);
                     announceTile.setAnnouncementEntries(entries);
-                    announceTile.setSoundVolume(currentVolume);
-                    announceTile.setSoundRange(currentRange);
-                    announceTile.setAttenuationType("LINEAR");
+                    announceTile.setSoundVolume(volume);
+                    announceTile.setSoundRange(range);
+                    announceTile.setAttenuationType(currentAttenuationType);
                     announceTile.setBoundingBoxEnabled(boundingBoxEnabled);
                     announceTile.setStartX(startX);
                     announceTile.setStartY(startY);
@@ -285,7 +321,7 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
                     announceTile.setTriggerMode(currentTriggerMode);
                     this.close();
                 } catch (NumberFormatException e) {
-                    // 数値でない場合は何もしない
+                    // Invalid seconds value - don't save
                 }
             }
         });
