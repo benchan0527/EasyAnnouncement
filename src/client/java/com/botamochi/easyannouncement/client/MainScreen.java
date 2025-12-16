@@ -20,6 +20,10 @@ import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 
+import java.awt.Toolkit;
+import java.awt.datatransfer.Clipboard;
+import java.awt.datatransfer.StringSelection;
+import java.awt.datatransfer.DataFlavor;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -235,6 +239,38 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
             endZField.setMaxLength(10);
             if (isElementVisible(yStart + 9 * yOffset - scrollOffset, fieldHeight)) {
                 this.addDrawableChild(endZField);
+            }
+            
+            // Copy/Paste Position Buttons
+            int buttonSmallWidth = 80;
+            int buttonSmallHeight = 20;
+            int buttonX = startXPos + 3 * (fieldWidth + labelOffset) + 10;
+            
+            // Copy Position Button (next to start coordinates)
+            ButtonWidget copyPosButton = new ButtonWidget(buttonX, yStart + 8 * yOffset - scrollOffset, buttonSmallWidth, buttonSmallHeight, 
+                Text.translatable("gui.easyannouncement.copy_position"), button -> {
+                    copyCurrentPosition();
+                });
+            if (isElementVisible(yStart + 8 * yOffset - scrollOffset, buttonSmallHeight)) {
+                this.addDrawableChild(copyPosButton);
+            }
+            
+            // Paste to Start Button
+            ButtonWidget pasteStartButton = new ButtonWidget(buttonX, yStart + 8 * yOffset - scrollOffset + buttonSmallHeight + 5, buttonSmallWidth, buttonSmallHeight, 
+                Text.translatable("gui.easyannouncement.paste_to_start"), button -> {
+                    pasteToStartCoordinates();
+                });
+            if (isElementVisible(yStart + 8 * yOffset - scrollOffset + buttonSmallHeight + 5, buttonSmallHeight)) {
+                this.addDrawableChild(pasteStartButton);
+            }
+            
+            // Paste to End Button
+            ButtonWidget pasteEndButton = new ButtonWidget(buttonX, yStart + 9 * yOffset - scrollOffset, buttonSmallWidth, buttonSmallHeight, 
+                Text.translatable("gui.easyannouncement.paste_to_end"), button -> {
+                    pasteToEndCoordinates();
+                });
+            if (isElementVisible(yStart + 9 * yOffset - scrollOffset, buttonSmallHeight)) {
+                this.addDrawableChild(pasteEndButton);
             }
         }
 
@@ -552,5 +588,124 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
             default:
                 return type;
         }
+    }
+    
+    /**
+     * Copy current player position to clipboard
+     */
+    private void copyCurrentPosition() {
+        if (client.player == null) {
+            return;
+        }
+        
+        BlockPos pos = client.player.getBlockPos();
+        String positionStr = pos.getX() + " " + pos.getY() + " " + pos.getZ();
+        
+        try {
+            Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
+            StringSelection selection = new StringSelection(positionStr);
+            clipboard.setContents(selection, null);
+            
+            // Show feedback message (you can customize this)
+            if (client.player != null) {
+                client.player.sendMessage(Text.translatable("gui.easyannouncement.position_copied", positionStr), false);
+            }
+        } catch (Exception e) {
+            System.err.println("[EasyAnnouncement] Failed to copy position to clipboard: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Parse position string from clipboard and fill start coordinates
+     * Supports formats: "x y z", "x,y,z", "x, y, z"
+     */
+    private void pasteToStartCoordinates() {
+        try {
+            Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
+            String clipboardText = (String) clipboard.getData(DataFlavor.stringFlavor);
+            
+            int[] coords = parsePosition(clipboardText);
+            if (coords != null) {
+                if (startXField != null) startXField.setText(String.valueOf(coords[0]));
+                if (startYField != null) startYField.setText(String.valueOf(coords[1]));
+                if (startZField != null) startZField.setText(String.valueOf(coords[2]));
+            } else {
+                if (client.player != null) {
+                    client.player.sendMessage(Text.translatable("gui.easyannouncement.invalid_position_format"), false);
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("[EasyAnnouncement] Failed to paste position: " + e.getMessage());
+            if (client.player != null) {
+                client.player.sendMessage(Text.translatable("gui.easyannouncement.paste_failed"), false);
+            }
+        }
+    }
+    
+    /**
+     * Parse position string from clipboard and fill end coordinates
+     * Supports formats: "x y z", "x,y,z", "x, y, z"
+     */
+    private void pasteToEndCoordinates() {
+        try {
+            Clipboard clipboard = Toolkit.getDefaultToolkit().getSystemClipboard();
+            String clipboardText = (String) clipboard.getData(DataFlavor.stringFlavor);
+            
+            int[] coords = parsePosition(clipboardText);
+            if (coords != null) {
+                if (endXField != null) endXField.setText(String.valueOf(coords[0]));
+                if (endYField != null) endYField.setText(String.valueOf(coords[1]));
+                if (endZField != null) endZField.setText(String.valueOf(coords[2]));
+            } else {
+                if (client.player != null) {
+                    client.player.sendMessage(Text.translatable("gui.easyannouncement.invalid_position_format"), false);
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("[EasyAnnouncement] Failed to paste position: " + e.getMessage());
+            if (client.player != null) {
+                client.player.sendMessage(Text.translatable("gui.easyannouncement.paste_failed"), false);
+            }
+        }
+    }
+    
+    /**
+     * Parse position string into coordinates array [x, y, z]
+     * Supports formats: "x y z", "x,y,z", "x, y, z"
+     */
+    private int[] parsePosition(String text) {
+        if (text == null || text.trim().isEmpty()) {
+            return null;
+        }
+        
+        // Try space-separated format: "x y z"
+        String[] parts = text.trim().split("\\s+");
+        if (parts.length == 3) {
+            try {
+                return new int[]{
+                    Integer.parseInt(parts[0]),
+                    Integer.parseInt(parts[1]),
+                    Integer.parseInt(parts[2])
+                };
+            } catch (NumberFormatException e) {
+                // Fall through to try comma-separated
+            }
+        }
+        
+        // Try comma-separated format: "x,y,z" or "x, y, z"
+        parts = text.trim().split("\\s*,\\s*");
+        if (parts.length == 3) {
+            try {
+                return new int[]{
+                    Integer.parseInt(parts[0]),
+                    Integer.parseInt(parts[1]),
+                    Integer.parseInt(parts[2])
+                };
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        
+        return null;
     }
 }

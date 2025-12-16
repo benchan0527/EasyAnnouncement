@@ -39,6 +39,12 @@
 	"gui.easyannouncement.range_label": "範圍：%d 方塊",
 	"gui.easyannouncement.empty": "(空)",
 	"gui.easyannouncement.trigger_mode": "觸發模式：%s",
+	"gui.easyannouncement.copy_position": "複製位置",
+	"gui.easyannouncement.paste_to_start": "貼上至起點",
+	"gui.easyannouncement.paste_to_end": "貼上至終點",
+	"gui.easyannouncement.position_copied": "已複製位置：%s",
+	"gui.easyannouncement.invalid_position_format": "無效的位置格式，請使用 \"x y z\" 或 \"x,y,z\"",
+	"gui.easyannouncement.paste_failed": "貼上失敗，請檢查剪貼板內容",
 
 	"announcement.easyannouncement.mtr_time_greeting": "現在時間%s，歡迎來到%s站",
 	"announcement.easyannouncement.mtr_zone_info": "，第%d區",

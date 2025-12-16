@@ -39,6 +39,12 @@
   "gui.easyannouncement.range_label": "Range: %d blocks",
   "gui.easyannouncement.empty": "(empty)",
   "gui.easyannouncement.trigger_mode": "Trigger Mode: %s",
+  "gui.easyannouncement.copy_position": "Copy Position",
+  "gui.easyannouncement.paste_to_start": "Paste to Start",
+  "gui.easyannouncement.paste_to_end": "Paste to End",
+  "gui.easyannouncement.position_copied": "Position copied: %s",
+  "gui.easyannouncement.invalid_position_format": "Invalid position format, use \"x y z\" or \"x,y,z\"",
+  "gui.easyannouncement.paste_failed": "Paste failed, please check clipboard content",
   
   "announcement.easyannouncement.mtr_time_greeting": "Current time is %s, welcome to %s Station",
   "announcement.easyannouncement.mtr_zone_info": ", Zone %d",
