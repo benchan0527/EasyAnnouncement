@@ -50,9 +50,18 @@ public class AnnounceTile extends BlockEntity implements ExtendedScreenHandlerFa
     private int endY = 320;     // Default end Y coordinate (build height)
     private int endZ = 100;     // Default end Z coordinate
     
-    // Trigger mode and edge detection
-    private String triggerMode = "EXACT"; // EXACT, AT_OR_BEFORE, AT_OR_AFTER
+    // Trigger mode - always EXACT (AT_OR_BEFORE/AT_OR_AFTER removed)
+    private String triggerMode = "EXACT";
     private long lastTriggeredArrivalMillis = -1L;
+
+    // Repeat mode - continuously repeat announcement at interval
+    private boolean repeatMode = false;
+    private long lastRepeatTime = 0;
+    private boolean isAnnouncementPlaying = false;
+    private long announcementStartTime = 0;
+    
+    // Exclude players above the block from receiving announcements
+    private boolean excludePlayersAbove = false;
 
     public AnnounceTile(BlockPos pos, BlockState state) {
         super(EATile.EA_BLOCK_TILE, pos, state);
@@ -68,7 +77,7 @@ public class AnnounceTile extends BlockEntity implements ExtendedScreenHandlerFa
         if (player instanceof ServerPlayerEntity serverPlayer) {
             AnnounceSendToClient.sendToClient(serverPlayer, pos, seconds, selectedPlatformIds, announcementEntries,
                 soundVolume, soundRange, attenuationType, boundingBoxEnabled,
-                startX, startY, startZ, endX, endY, endZ, triggerMode);
+                startX, startY, startZ, endX, endY, endZ, triggerMode, repeatMode, excludePlayersAbove);
         }
         return new MainScreenHandler(syncId, inv, this);
     }
@@ -111,8 +120,9 @@ public class AnnounceTile extends BlockEntity implements ExtendedScreenHandlerFa
                         String finalDestination = null;
                         long lastPlatformId = route.getLastPlatformId();
                         mtr.data.Platform lastPlatform = railwayData.dataCache.platformIdMap.get(lastPlatformId);
-                        if (lastPlatform != null) {
-                            finalDestination = railwayData.dataCache.platformIdToStation.get(lastPlatformId).name;
+                        mtr.data.Station lastStation = railwayData.dataCache.platformIdToStation.get(lastPlatformId);
+                        if (lastPlatform != null && lastStation != null) {
+                            finalDestination = lastStation.name;
                         }
                         if (finalDestination != null) {
                             int lastPipeIndex = finalDestination.lastIndexOf('|');
@@ -163,8 +173,15 @@ public class AnnounceTile extends BlockEntity implements ExtendedScreenHandlerFa
                     calculatedDestination = "route_unknown";
                     calculatedRouteType = "";
                 }
-                // HH:MM from the chosen entry arrivalMillis
-                java.time.ZonedDateTime zdt = java.time.Instant.ofEpochMilli(chosen.entry.arrivalMillis).atZone(java.time.ZoneId.systemDefault());
+                // HH:MM from the chosen entry arrivalMillis + dwell time (departure time)
+                // Get dwell time from the platform
+                long departureMillis = chosen.entry.arrivalMillis;
+                mtr.data.Platform platform = railwayData != null ? railwayData.dataCache.platformIdMap.get(chosen.platformId) : null;
+                if (platform != null) {
+                    // dwellTime is in seconds, convert to milliseconds
+                    departureMillis = chosen.entry.arrivalMillis + (platform.getDwellTime() * 1000L);
+                }
+                java.time.ZonedDateTime zdt = java.time.Instant.ofEpochMilli(departureMillis).atZone(java.time.ZoneId.systemDefault());
                 hh = String.format("%02d", zdt.getHour());
                 mm = String.format("%02d", zdt.getMinute());
             } else {
@@ -186,33 +203,91 @@ public class AnnounceTile extends BlockEntity implements ExtendedScreenHandlerFa
         if (world.isClient || world.getServer().isStopping()) return; // ポーズ中は早期リターン
 
         long currentTime = System.currentTimeMillis();
+
+        // Handle repeat mode - wait for announcement to finish, then repeat after interval
+        if (repeatMode) {
+            // User-specified interval in milliseconds
+            long repeatIntervalMs = (long) getSeconds() * 1000L;
+            if (repeatIntervalMs <= 0) {
+                repeatIntervalMs = 60000; // Default to 60 seconds minimum
+            }
+
+            // Check if we're currently waiting for announcement to finish
+            if (isAnnouncementPlaying) {
+                // Fallback: if no client notification comes for too long (30 seconds), assume finished
+                if (currentTime - announcementStartTime >= 30000) {
+                    isAnnouncementPlaying = false;
+                    lastRepeatTime = currentTime;
+                }
+                return; // Don't trigger new announcement while one is playing
+            }
+
+            // Check if it's time to repeat (counting from when last announcement finished)
+            if (currentTime - lastRepeatTime >= repeatIntervalMs) {
+                if (currentTime - lastAnnounceTriggerTime >= MIN_TRIGGER_INTERVAL) {
+                    if (world.getServer() != null) {
+                        // Count players who would receive the announcement
+                        int playerCount = 0;
+                        for (ServerPlayerEntity player : world.getServer().getPlayerManager().getPlayerList()) {
+                            if (excludePlayersAbove && player.getBlockY() > pos.getY()) {
+                                continue;
+                            }
+                            playerCount++;
+                        }
+
+                        // Only trigger if there are players to notify
+                        if (playerCount > 0) {
+                            for (ServerPlayerEntity player : world.getServer().getPlayerManager().getPlayerList()) {
+                                // Skip players above the block if this setting is enabled
+                                if (excludePlayersAbove && player.getBlockY() > pos.getY()) {
+                                    continue;
+                                }
+                                startAnnouncement(player);
+                            }
+                            // Update shared state AFTER all players have been notified
+                            lastAnnounceTriggerTime = currentTime;
+                            announcementStartTime = currentTime;
+                            isAnnouncementPlaying = true;
+                        }
+                    }
+                }
+            }
+            return; // Skip normal trigger mode when in repeat mode
+        }
+
+        // Normal trigger mode (not repeat mode)
         RailwayData railwayData = RailwayData.getInstance(world);
         final ScheduleEntry next = getNextScheduleEntry(railwayData, selectedPlatformIds);
         if (next != null) {
             long ticksUntilArrival = (next.arrivalMillis - currentTime) / 50; // ms -> ticks
             long threshold = (long) getSeconds() * 20L;
-            boolean conditionMet;
-            switch (triggerMode) {
-                case "AT_OR_BEFORE":
-                    conditionMet = ticksUntilArrival <= threshold;
-                    break;
-                case "AT_OR_AFTER":
-                    conditionMet = ticksUntilArrival >= threshold;
-                    break;
-                case "EXACT":
-                default:
-                    // 使用範圍比較而非精確匹配，避免時間精度問題
-                    // 允許 ±1 tick 的誤差範圍
-                    conditionMet = Math.abs(ticksUntilArrival - threshold) <= 1;
-            }
+            // EXACT mode: 使用範圍比較而非精確匹配，避免時間精度問題，允許 ±1 tick 的誤差範圍
+            boolean conditionMet = Math.abs(ticksUntilArrival - threshold) <= 1;
             if (conditionMet && lastTriggeredArrivalMillis != next.arrivalMillis) {
                 if (currentTime - lastAnnounceTriggerTime >= MIN_TRIGGER_INTERVAL) {
                     if (world.getServer() != null) {
+                        // Count players who would receive the announcement
+                        int playerCount = 0;
                         for (ServerPlayerEntity player : world.getServer().getPlayerManager().getPlayerList()) {
-                            startAnnouncement(player);
+                            if (excludePlayersAbove && player.getBlockY() > pos.getY()) {
+                                continue;
+                            }
+                            playerCount++;
                         }
-                        lastAnnounceTriggerTime = currentTime; // トリガー時間を更新
-                        lastTriggeredArrivalMillis = next.arrivalMillis; // 1 本の列車につき 1 回のみ
+
+                        // Only trigger if there are players to notify
+                        if (playerCount > 0) {
+                            for (ServerPlayerEntity player : world.getServer().getPlayerManager().getPlayerList()) {
+                                // Skip players above the block if this setting is enabled
+                                if (excludePlayersAbove && player.getBlockY() > pos.getY()) {
+                                    continue;
+                                }
+                                startAnnouncement(player);
+                            }
+                            // Update shared state AFTER all players have been notified
+                            lastAnnounceTriggerTime = currentTime;
+                            lastTriggeredArrivalMillis = next.arrivalMillis;
+                        }
                     }
                 }
             }
@@ -445,6 +520,44 @@ public class AnnounceTile extends BlockEntity implements ExtendedScreenHandlerFa
         }
     }
 
+    public boolean isRepeatMode() { return repeatMode; }
+
+    public void setRepeatMode(boolean repeatMode) {
+        if (this.repeatMode != repeatMode) {
+            this.repeatMode = repeatMode;
+            // Reset repeat timer and state when mode changes
+            if (repeatMode) {
+                // Turning repeat mode ON
+                lastRepeatTime = System.currentTimeMillis();
+            } else {
+                // Turning repeat mode OFF - reset all repeat-related state
+                isAnnouncementPlaying = false;
+                announcementStartTime = 0;
+            }
+            markDirty();
+        }
+    }
+    
+    public boolean isExcludePlayersAbove() { return excludePlayersAbove; }
+    
+    public void setExcludePlayersAbove(boolean excludePlayersAbove) {
+        if (this.excludePlayersAbove != excludePlayersAbove) {
+            this.excludePlayersAbove = excludePlayersAbove;
+            markDirty();
+        }
+    }
+
+    /**
+     * Called when client notifies that announcement has finished playing
+     * This is used for accurate repeat timing
+     */
+    public void onAnnouncementFinished() {
+        if (repeatMode && isAnnouncementPlaying) {
+            isAnnouncementPlaying = false;
+            lastRepeatTime = System.currentTimeMillis(); // Start counting interval from when announcement actually finished
+        }
+    }
+
     @Override
     public void writeNbt(NbtCompound nbt) {
         super.writeNbt(nbt);
@@ -482,6 +595,11 @@ public class AnnounceTile extends BlockEntity implements ExtendedScreenHandlerFa
         // Save trigger mode
         nbt.putString("TriggerMode", triggerMode);
 
+        // Save repeat mode
+        nbt.putBoolean("RepeatMode", repeatMode);
+        
+        // Save exclude players above setting
+        nbt.putBoolean("ExcludePlayersAbove", excludePlayersAbove);
     }
 
     @Override
@@ -532,6 +650,13 @@ public class AnnounceTile extends BlockEntity implements ExtendedScreenHandlerFa
         
         // Load trigger mode
         triggerMode = nbt.contains("TriggerMode") ? nbt.getString("TriggerMode") : "EXACT";
+
+        // Load repeat mode
+        repeatMode = nbt.contains("RepeatMode") ? nbt.getBoolean("RepeatMode") : false;
+
+        // Load exclude players above setting
+        excludePlayersAbove = nbt.contains("ExcludePlayersAbove") ? nbt.getBoolean("ExcludePlayersAbove") : false;
+
         // Reset runtime-only state
         lastTriggeredArrivalMillis = -1L;
     }
@@ -554,7 +679,7 @@ public class AnnounceTile extends BlockEntity implements ExtendedScreenHandlerFa
                     for (ServerPlayerEntity player : world.getServer().getPlayerManager().getPlayerList()) {
                         AnnounceSendToClient.sendToClient(player, pos, seconds, selectedPlatformIds, announcementEntries,
                             soundVolume, soundRange, attenuationType, boundingBoxEnabled,
-                            startX, startY, startZ, endX, endY, endZ, triggerMode);
+                            startX, startY, startZ, endX, endY, endZ, triggerMode, repeatMode, excludePlayersAbove);
                     }
                 }
                 lastMarkDirtyTime = currentTime;
@@ -625,8 +750,9 @@ public class AnnounceTile extends BlockEntity implements ExtendedScreenHandlerFa
             String finalDestination = null;
             long lastPlatformId = route.getLastPlatformId();
             Platform lastPlatform = railwayData.dataCache.platformIdMap.get(lastPlatformId);
-            if (lastPlatform != null) {
-                finalDestination = railwayData.dataCache.platformIdToStation.get(lastPlatformId).name;
+            Station lastStation = railwayData.dataCache.platformIdToStation.get(lastPlatformId);
+            if (lastPlatform != null && lastStation != null) {
+                finalDestination = lastStation.name;
             }
             if (finalDestination != null) {
                 int lastPipeIndex = finalDestination.lastIndexOf('|');
@@ -705,7 +831,17 @@ public class AnnounceTile extends BlockEntity implements ExtendedScreenHandlerFa
         }
         final ScheduleEntry next = getNextScheduleEntry(railwayData, selectedPlatforms);
         if (next == null) return result;
-        java.time.ZonedDateTime zdt = java.time.Instant.ofEpochMilli(next.arrivalMillis).atZone(java.time.ZoneId.systemDefault());
+        
+        // Calculate departure time (arrival + dwell)
+        long departureMillis = next.arrivalMillis;
+        if (!selectedPlatforms.isEmpty()) {
+            mtr.data.Platform platform = railwayData.dataCache.platformIdMap.get(selectedPlatforms.get(0));
+            if (platform != null) {
+                // dwellTime is in seconds, convert to milliseconds
+                departureMillis = next.arrivalMillis + (platform.getDwellTime() * 1000L);
+            }
+        }
+        java.time.ZonedDateTime zdt = java.time.Instant.ofEpochMilli(departureMillis).atZone(java.time.ZoneId.systemDefault());
         String hh = String.format("%02d", zdt.getHour());
         String mm = String.format("%02d", zdt.getMinute());
         return new String[]{hh, mm};

@@ -11,6 +11,9 @@ import mtr.data.Platform;
 import mtr.data.Route;
 import mtr.data.ScheduleEntry;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
+import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.network.PacketByteBuf;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.sound.PositionedSoundInstance;
 import net.minecraft.client.sound.SoundInstance;
@@ -31,8 +34,11 @@ import java.util.concurrent.ConcurrentHashMap;
 public class AnnounceReceiveFromServer {
     public static final Identifier ID = new Identifier(Easyannouncement.MOD_ID, "announce_update");
     public static final Identifier ANNOUNCE_START_ID = new Identifier(Easyannouncement.MOD_ID, "announce_start");
+    public static final Identifier ANNOUNCEMENT_FINISHED_ID = new Identifier(Easyannouncement.MOD_ID, "announcement_finished");
     
     private static final long MIN_ANNOUNCE_INTERVAL = 500; // 例: 500 ミリ秒間隔
+    private static final long CLEANUP_INTERVAL = 300000; // 清理過期 entry 既 interval (5 分鐘)
+    private static long lastCleanupTime = 0;
     // 使用 ConcurrentHashMap 以確保線程安全
     private static final Map<BlockPos, Long> lastAnnounceTime = new ConcurrentHashMap<>();
 
@@ -42,6 +48,13 @@ public class AnnounceReceiveFromServer {
 		// Removed announce_update receiver; handled by ClientNetworkHandler to use new entry-list protocol
 		ClientPlayNetworking.registerGlobalReceiver(ANNOUNCE_START_ID, (client, handler, buf, responseSender) -> {
 			try {
+				// Periodic cleanup of old entries to prevent memory leak
+				long currentTime = System.currentTimeMillis();
+				if (currentTime - lastCleanupTime > CLEANUP_INTERVAL) {
+					cleanupOldEntries(currentTime);
+					lastCleanupTime = currentTime;
+				}
+
 				final BlockPos pos = buf.readBlockPos();
 				long[] platformIds = buf.readLongArray();
 				final List<Long> selectedPlatforms = new ArrayList<>();
@@ -149,9 +162,9 @@ public class AnnounceReceiveFromServer {
 				);
 				final List<AnnouncementEntry> finalEntries = announcementEntries;
 				client.execute(() -> {
-					long currentTime = System.currentTimeMillis();
-					if (!lastAnnounceTime.containsKey(pos) || currentTime - lastAnnounceTime.get(pos) > MIN_ANNOUNCE_INTERVAL) {
-						lastAnnounceTime.put(pos, currentTime);
+					long now = System.currentTimeMillis();
+					if (!lastAnnounceTime.containsKey(pos) || now - lastAnnounceTime.get(pos) > MIN_ANNOUNCE_INTERVAL) {
+						lastAnnounceTime.put(pos, now);
 						playMultiJsonAnnouncements(client, pos, finalEntries, context);
 					} else {
 						System.err.println("[EasyAnnouncement] Skipping duplicate announcement at: " + pos);
@@ -265,71 +278,74 @@ public class AnnounceReceiveFromServer {
                 
                 if (!jsonObject.has("sounds")) {
                     System.err.println("JSON file does not contain 'sounds' array: " + jsonId);
-                    return soundDataList;
-                }
-                
-                JsonArray announcementArray = jsonObject.getAsJsonArray("sounds");
-                if (announcementArray == null || announcementArray.size() == 0) {
-                    System.err.println("JSON file has empty or null 'sounds' array: " + jsonId);
-                    return soundDataList;
-                }
-                
-                for (int i = 0; i < announcementArray.size(); i++) {
-                    try {
-                        JsonObject announcementObject = announcementArray.get(i).getAsJsonObject();
-                        if (!announcementObject.has("soundPath")) {
-                            System.err.println("Sound object at index " + i + " missing 'soundPath' field");
-                            continue;
-                        }
-                        
-                        String rawSoundPath = announcementObject.get("soundPath").getAsString();
-                        // If soundPath doesn't have namespace, inherit from JSON file's namespace
-                        if (!rawSoundPath.contains(":")) {
-                            rawSoundPath = jsonNamespace + ":" + rawSoundPath;
-                        }
-                        double duration = announcementObject.has("duration") ? announcementObject.get("duration").getAsDouble() : 0.0;
-                        List<String> formattedSoundPaths = getFormattedAnnouncement(rawSoundPath, context);
-                        for (String formattedSoundPath : formattedSoundPaths) {
-                            soundDataList.add(new SoundData(formattedSoundPath, duration));
-                        }
-                    } catch (Exception e) {
-                        System.err.println("Error processing sound object at index " + i + ": " + e.getMessage());
-                        e.printStackTrace();
+                    // Fall through to try sound.json lookup
+                } else {
+                    JsonArray announcementArray = jsonObject.getAsJsonArray("sounds");
+                    if (announcementArray == null || announcementArray.size() == 0) {
+                        System.err.println("JSON file has empty or null 'sounds' array: " + jsonId);
+                        return soundDataList;
                     }
+                    
+                    for (int i = 0; i < announcementArray.size(); i++) {
+                        try {
+                            JsonObject announcementObject = announcementArray.get(i).getAsJsonObject();
+                            if (!announcementObject.has("soundPath")) {
+                                System.err.println("Sound object at index " + i + " missing 'soundPath' field");
+                                continue;
+                            }
+                            
+                            String rawSoundPath = announcementObject.get("soundPath").getAsString();
+                            // If soundPath doesn't have namespace, inherit from JSON file's namespace
+                            if (!rawSoundPath.contains(":")) {
+                                rawSoundPath = jsonNamespace + ":" + rawSoundPath;
+                            }
+                            // [UNUSED] duration from JSON is not used - only delaySeconds from GUI is used
+                            double duration = announcementObject.has("duration") ? announcementObject.get("duration").getAsDouble() : 0.0;
+                            List<String> formattedSoundPaths = getFormattedAnnouncement(rawSoundPath, context);
+                            for (String formattedSoundPath : formattedSoundPaths) {
+                                soundDataList.add(new SoundData(formattedSoundPath, duration));
+                            }
+                        } catch (Exception e) {
+                            System.err.println("Error processing sound object at index " + i + ": " + e.getMessage());
+                            e.printStackTrace();
+                        }
+                    }
+                    return soundDataList;
                 }
             } catch (Exception e) {
                 System.err.println("Failed to load announcement sequence JSON: " + e.getMessage());
                 e.printStackTrace();
             }
-        } else {
-            // Fallback: treat selectedJson itself as a single sound event id
-            if (trimmed.isEmpty()) {
-                return soundDataList;
-            }
-            
+        }
+        
+        // Try to find the sound from sound.json (Minecraft's sound registry)
+        // This allows users to directly use sound IDs defined in sound.json without needing a custom JSON file
+        if (!trimmed.isEmpty()) {
             Identifier soundId;
             if (trimmed.contains(":")) {
                 soundId = Identifier.tryParse(trimmed);
-                if (soundId == null) {
-                    System.err.println("[EasyAnnouncement] Invalid sound ID: " + trimmed);
-                    return soundDataList;
-                }
             } else {
-                soundId = new Identifier(Easyannouncement.MOD_ID, trimmed);
+                soundId = new Identifier("easyannouncement", trimmed);
             }
             
-            // Try to get or create sound event
-            SoundEvent soundEvent = Registry.SOUND_EVENT.getOrEmpty(soundId).orElse(null);
-            if (soundEvent == null) {
-                try {
-                    soundEvent = new SoundEvent(soundId);
-                } catch (Exception e) {
-                    System.err.println("[EasyAnnouncement] Failed to create sound event: " + soundId);
+            // Check if this sound exists in the SoundEvent registry (loaded from sound.json)
+            if (soundId != null) {
+                SoundEvent soundEvent = Registry.SOUND_EVENT.getOrEmpty(soundId).orElse(null);
+                if (soundEvent != null) {
+                    soundDataList.add(new SoundData(soundId.toString(), 0.0));
                     return soundDataList;
                 }
+                
+                // Try to create a dynamic sound event (for custom sounds in assets)
+                try {
+                    soundDataList.add(new SoundData(soundId.toString(), 0.0));
+                    return soundDataList;
+                } catch (Exception e) {
+                    System.err.println("[EasyAnnouncement] Failed to use sound: " + soundId);
+                }
             }
-            soundDataList.add(new SoundData(soundId.toString(), 0.0));
         }
+        
         return soundDataList;
     }
 
@@ -534,11 +550,13 @@ public class AnnounceReceiveFromServer {
         
 		final float finalVolume = volume;
 		final SoundInstance.AttenuationType finalAttenuationType = attenuationType;
+        final BlockPos finalPos = pos;
         
         		// Schedule announcements using absolute time from broadcast start
 		Thread schedulerThread = new Thread(() -> {
 			try {
 				long startTime = System.currentTimeMillis();
+                List<Thread> entryThreads = new ArrayList<>();
 				
 				for (int i = 0; i < announcementEntries.size(); i++) {
 					// 檢查是否被中斷
@@ -586,8 +604,26 @@ public class AnnounceReceiveFromServer {
 						playAnnouncementSounds(client, pos, finalSoundDataList, finalVolume, finalAttenuationType);
 					}, "EA-Entry-" + (i + 1));
 					entryThread.setDaemon(true); // 設為 daemon 線程
+                    entryThreads.add(entryThread);
 					entryThread.start();
 				}
+                
+                // Wait for all entry threads to finish
+                for (Thread entryThread : entryThreads) {
+                    entryThread.join();
+                }
+                
+                // All sounds finished - send notification to server
+                final MinecraftClient finalClient = client;
+                client.execute(() -> {
+                    try {
+                        PacketByteBuf buf = PacketByteBufs.create();
+                        buf.writeBlockPos(finalPos);
+                        ClientPlayNetworking.send(ANNOUNCEMENT_FINISHED_ID, buf);
+                    } catch (Exception e) {
+                        System.err.println("[EasyAnnouncement] Failed to send announcement finished notification: " + e.getMessage());
+                    }
+                });
 			} catch (InterruptedException e) {
 				Thread.currentThread().interrupt();
 			} catch (Exception e) {
@@ -602,7 +638,7 @@ public class AnnounceReceiveFromServer {
     	private static String getPlatformName(AnnouncementContext context) {
         		if (context.getChosenPlatformId() != -1L) {
 			Platform platform = ClientData.DATA_CACHE.platformIdMap.get(context.getChosenPlatformId());
-			return platform != null ? cleanMtrText(platform.name) : "platform_name_unknown";
+			return platform != null && platform.name != null ? cleanMtrText(platform.name) : "platform_name_unknown";
 		}
         		List<Long> selectedPlatforms = context.getPlatformIds();
 		if (selectedPlatforms.isEmpty()) {
@@ -610,7 +646,7 @@ public class AnnounceReceiveFromServer {
 		}
 		long platformId = selectedPlatforms.get(0);
         Platform platform = ClientData.DATA_CACHE.platformIdMap.get(platformId);
-        return platform != null ? cleanMtrText(platform.name) : "platform_name_unknown";
+        return platform != null && platform.name != null ? cleanMtrText(platform.name) : "platform_name_unknown";
     }
 
     	private static String getRouteName(AnnouncementContext context) {
@@ -664,7 +700,27 @@ public class AnnounceReceiveFromServer {
     }
 
     	private static String getCurrentStationName(AnnouncementContext context) {
-        		if (context.getChosenPlatformId() != -1L) {
+    		// First try to get current station from route and current station index
+		if (context.getChosenRouteId() != -1L && context.getChosenCurrentStationIndex() >= 0) {
+			Route route = ClientData.DATA_CACHE.routeIdMap.get(context.getChosenRouteId());
+			if (route != null && context.getChosenCurrentStationIndex() < route.platformIds.size()) {
+				long currentPlatformId = route.platformIds.get(context.getChosenCurrentStationIndex()).platformId;
+				if (ClientData.DATA_CACHE.platformIdToStation.get(currentPlatformId) != null) {
+					String rawName = ClientData.DATA_CACHE.platformIdToStation.get(currentPlatformId).name;
+		            if (rawName == null || rawName.isEmpty()) {
+		                return "station_name_unknown";
+		            }
+		            int lastPipeIndex = rawName.lastIndexOf('|');
+		            String englishOnly = lastPipeIndex != -1 && lastPipeIndex < rawName.length() - 1
+		                    ? rawName.substring(lastPipeIndex + 1)
+		                    : rawName;
+		            return cleanMtrText(englishOnly);
+				}
+			}
+		}
+		
+		// Fallback to using chosen platform ID
+		if (context.getChosenPlatformId() != -1L) {
 			if (ClientData.DATA_CACHE.platformIdToStation.get(context.getChosenPlatformId()) == null) {
 				return "station_name_unknown";
 			}
@@ -678,15 +734,18 @@ public class AnnounceReceiveFromServer {
                     : rawName;
             return cleanMtrText(englishOnly);
         }
-        		List<Long> selectedPlatforms = context.getPlatformIds();
+        
+        // Final fallback to first selected platform
+		List<Long> selectedPlatforms = context.getPlatformIds();
 		if (selectedPlatforms == null || selectedPlatforms.isEmpty()) {
 			return "station_name_not_found";
 		}
 		long platformId = selectedPlatforms.get(0);
-        if (ClientData.DATA_CACHE.platformIdToStation.get(platformId) == null) {
+		var station = ClientData.DATA_CACHE.platformIdToStation.get(platformId);
+        if (station == null) {
             return "station_name_unknown";
         }
-        String rawName = ClientData.DATA_CACHE.platformIdToStation.get(platformId).name;
+        String rawName = station.name;
         if (rawName == null || rawName.isEmpty()) {
             return "station_name_unknown";
         }
@@ -697,22 +756,27 @@ public class AnnounceReceiveFromServer {
         return cleanMtrText(englishOnly);
     }
 
-    	private static String getNextStationName(AnnouncementContext context) {
-        		if (context.getChosenRouteId() != -1L && context.getChosenCurrentStationIndex() != -1) {
+   	private static String getNextStationName(AnnouncementContext context) {
+       	if (context.getChosenRouteId() != -1L && context.getChosenCurrentStationIndex() != -1) {
 			Route route = ClientData.DATA_CACHE.routeIdMap.get(context.getChosenRouteId());
-			if (route != null && context.getChosenCurrentStationIndex() + 1 < route.platformIds.size()) {
-				long nextPlatformId = route.platformIds.get(context.getChosenCurrentStationIndex() + 1).platformId;
-                if (ClientData.DATA_CACHE.platformIdToStation.get(nextPlatformId) != null) {
-                    String rawName = ClientData.DATA_CACHE.platformIdToStation.get(nextPlatformId).name;
-                    int lastPipeIndex = rawName.lastIndexOf('|');
-                    String englishOnly = lastPipeIndex != -1 && lastPipeIndex < rawName.length() - 1
-                            ? rawName.substring(lastPipeIndex + 1)
-                            : rawName;
-                    return cleanMtrText(englishOnly);
-                }
+			if (route != null && route.platformIds != null && context.getChosenCurrentStationIndex() + 1 < route.platformIds.size()) {
+				var platformInfo = route.platformIds.get(context.getChosenCurrentStationIndex() + 1);
+				if (platformInfo != null) {
+					long nextPlatformId = platformInfo.platformId;
+					if (ClientData.DATA_CACHE.platformIdToStation.get(nextPlatformId) != null) {
+						String rawName = ClientData.DATA_CACHE.platformIdToStation.get(nextPlatformId).name;
+						if (rawName != null && !rawName.isEmpty()) {
+							int lastPipeIndex = rawName.lastIndexOf('|');
+							String englishOnly = lastPipeIndex != -1 && lastPipeIndex < rawName.length() - 1
+									? rawName.substring(lastPipeIndex + 1)
+									: rawName;
+							return cleanMtrText(englishOnly);
+						}
+					}
+				}
             }
         }
-        		List<Long> selectedPlatforms = context.getPlatformIds();
+       		List<Long> selectedPlatforms = context.getPlatformIds();
 		if (selectedPlatforms == null || selectedPlatforms.isEmpty()) {
 			return "next_station_name_not_found";
 		}
@@ -722,11 +786,18 @@ public class AnnounceReceiveFromServer {
             return "next_station_name_unknown";
         }
         ClientCache.PlatformRouteDetails details = routeDetails.get(0);
+        if (details == null) {
+            return "next_station_name_unknown";
+        }
         int nextIndex = details.currentStationIndex + 1;
         if (details.stationDetails == null || nextIndex < 0 || nextIndex >= details.stationDetails.size()) {
             return "next_station_name_unknown";
         }
-        String nextStationName = details.stationDetails.get(nextIndex).stationName;
+        var stationDetail = details.stationDetails.get(nextIndex);
+        if (stationDetail == null) {
+            return "next_station_name_unknown";
+        }
+        String nextStationName = stationDetail.stationName;
         if (nextStationName == null || nextStationName.isEmpty()) {
             return "next_station_name_unknown";
         }
@@ -766,11 +837,18 @@ public class AnnounceReceiveFromServer {
 
     private static class SoundData {
         String soundPath;
+        // [UNUSED] duration field is not used - kept for potential future use
         double duration;
 
         public SoundData(String soundPath, double duration) {
             this.soundPath = soundPath;
             this.duration = duration;
         }
+    }
+
+    // Clean up old entries from lastAnnounceTime map to prevent memory leak
+    private static void cleanupOldEntries(long currentTime) {
+        long threshold = currentTime - 600000; // Remove entries older than 10 minutes
+        lastAnnounceTime.entrySet().removeIf(entry -> entry.getValue() < threshold);
     }
 }

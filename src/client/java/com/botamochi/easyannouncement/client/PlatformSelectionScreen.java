@@ -36,12 +36,22 @@ public class PlatformSelectionScreen extends Screen {
     private int listX;
     private int listYStart;
     private int listYOffset;
+    private String stationName = "";
 
     public PlatformSelectionScreen(BlockPos blockPos, List<Long> selectedPlatforms) {
         super(Text.translatable("gui.easyannouncement.platform_selection"));
         this.blockPos = blockPos;
         this.selectedPlatforms = new HashSet<>(selectedPlatforms); // 初期化
         this.platforms = getPlatforms();
+        
+        // Get the station name for display
+        World world = MinecraftClient.getInstance().world;
+        if (world != null) {
+            Station station = RailwayData.getStation(ClientData.STATIONS, ClientData.DATA_CACHE, blockPos);
+            if (station != null) {
+                stationName = cleanMtrText(station.name);
+            }
+        }
     }
 
     private List<Platform> getPlatforms() {
@@ -199,11 +209,21 @@ public class PlatformSelectionScreen extends Screen {
         
         // Write trigger mode last (optional older server compatibility)
         String triggerMode = "EXACT";
+        boolean repeatMode = false;
+        boolean excludePlayersAbove = false;
         if (MinecraftClient.getInstance().world != null &&
             MinecraftClient.getInstance().world.getBlockEntity(pos) instanceof AnnounceTile tile2) {
             triggerMode = tile2.getTriggerMode();
+            repeatMode = tile2.isRepeatMode();
+            excludePlayersAbove = tile2.isExcludePlayersAbove();
         }
         buf.writeString(triggerMode);
+
+        // Write repeat mode (optional for older servers)
+        buf.writeBoolean(repeatMode);
+
+        // Write exclude players above setting (optional for older servers)
+        buf.writeBoolean(excludePlayersAbove);
 
         // サーバーに送信
         ClientPlayNetworking.send(AnnounceSendToClient.ID, buf); // IDの変更
@@ -246,6 +266,12 @@ public class PlatformSelectionScreen extends Screen {
     @Override
     public void render(MatrixStack matrices, int mouseX, int mouseY, float delta) {
         this.renderBackground(matrices);
+        
+        // Draw station name at the top
+        if (!stationName.isEmpty()) {
+            drawCenteredText(matrices, this.textRenderer, Text.of(stationName), this.width / 2, this.height / 4 - 35, 0xFFFF00);
+        }
+        
         drawCenteredText(matrices, this.textRenderer, this.title, this.width / 2, this.height / 4 - 20, 0xFFFFFF);
         super.render(matrices, mouseX, mouseY, delta);
 

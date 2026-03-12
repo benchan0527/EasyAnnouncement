@@ -9,6 +9,7 @@ import java.io.InputStreamReader;
 import java.util.*;
 
 public class AnnouncementJsonLoader {
+    // [UNUSED] soundDataMap and related methods are not used - kept for potential future use
     private static final Map<String, Map<String, Double>> soundDataMap = new LinkedHashMap<>();
 
     // JSON ファイル名を引数として受け取るように修正
@@ -22,6 +23,7 @@ public class AnnouncementJsonLoader {
             for (JsonElement element : soundsArray) {
                 JsonObject soundObject = element.getAsJsonObject();
                 String soundId = soundObject.get("soundId").getAsString();
+                // [UNUSED] duration is read but not used anywhere
                 double duration = soundObject.get("duration").getAsDouble();
                 soundDurationMap.put(soundId, duration);
             }
@@ -34,6 +36,7 @@ public class AnnouncementJsonLoader {
         }
     }
 
+    // [UNUSED] method not used
     public static List<String> getSoundsForJson(String jsonName) {
         Map<String, Double> soundDurationMap = soundDataMap.get(jsonName);
         if (soundDurationMap == null) {
@@ -43,6 +46,7 @@ public class AnnouncementJsonLoader {
         return new ArrayList<>(soundDurationMap.keySet());
     }
 
+    // [UNUSED] method not used
     public static double getDurationForSound(String jsonName, String soundId) {
         Map<String, Double> soundDurationMap = soundDataMap.get(jsonName);
         if (soundDurationMap == null) {
@@ -53,6 +57,7 @@ public class AnnouncementJsonLoader {
         return soundDurationMap.getOrDefault(soundId, 1.0);
     }
 
+    // [UNUSED] method not used
     public static void addDurationForSound(String jsonName, String soundId, double duration) {
         Map<String, Double> soundDurationMap = soundDataMap.get(jsonName);
         if (soundDurationMap != null) {

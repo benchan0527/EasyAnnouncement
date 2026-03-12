@@ -61,6 +61,7 @@ public class Easyannouncement implements ModInitializer {
 
         // サーバー側でパケットを受信する
         AnnounceSendToClient.register();
+        AnnounceSendToClient.registerAnnouncementFinishedHandler();
 
         ServerWorldEvents.LOAD.register((server, world) -> {
             if (!world.isClient()) {

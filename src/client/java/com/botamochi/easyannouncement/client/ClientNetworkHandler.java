@@ -32,7 +32,6 @@ public class ClientNetworkHandler {
 			String attenuationType = "LINEAR";
 			boolean boundingBoxEnabled = false;
 			int startX = -100, startY = -64, startZ = -100, endX = 100, endY = 320, endZ = 100;
-			String triggerMode = "EXACT";
 			
 			// Backward-compatible parsing (same as server-side)
 			if (buf.readableBytes() >= 4) {
@@ -76,11 +75,22 @@ public class ClientNetworkHandler {
 				endZ = buf.readInt();
 			}
 			
-			// Trigger mode (optional in older servers)
+			// Trigger mode (optional in older clients)
+			String triggerMode = "EXACT";
+			if (buf.readableBytes() >= 4) {
+				triggerMode = buf.readString(32767);
+			}
+			
+			// Repeat mode (optional in older clients)
+			boolean repeatMode = false;
 			if (buf.readableBytes() >= 1) {
-				try {
-					triggerMode = buf.readString();
-				} catch (Exception ignored) {}
+				repeatMode = buf.readBoolean();
+			}
+			
+			// Exclude players above (optional in older clients)
+			boolean excludePlayersAbove = false;
+			if (buf.readableBytes() >= 1) {
+				excludePlayersAbove = buf.readBoolean();
 			}
 
 			final float volumeFinal = volume;
@@ -94,11 +104,14 @@ public class ClientNetworkHandler {
 			final int endYFinal = endY;
 			final int endZFinal = endZ;
 			final String triggerModeFinal = triggerMode;
+			final boolean repeatModeFinal = repeatMode;
+			final boolean excludePlayersAboveFinal = excludePlayersAbove;
 
 			// Removed normal log: Received packet details
 
 			client.execute(() -> {
 				ClientPlayerEntity player = client.player;
+				boolean tileUpdated = false;
 				if (player != null && player.world.getBlockEntity(pos) instanceof AnnounceTile announceTile) {
 					announceTile.setSeconds(seconds);
 					announceTile.setSelectedPlatformIds(selectedPlatforms);
@@ -114,10 +127,14 @@ public class ClientNetworkHandler {
 					announceTile.setEndY(endYFinal);
 					announceTile.setEndZ(endZFinal);
 					announceTile.setTriggerMode(triggerModeFinal);
+					announceTile.setRepeatMode(repeatModeFinal);
+					announceTile.setExcludePlayersAbove(excludePlayersAboveFinal);
+					tileUpdated = true;
+				}
 
-					if (client.currentScreen instanceof MainScreen mainScreen) {
-						mainScreen.updateData(seconds, selectedPlatforms, announcementEntries);
-					}
+				// Always update GUI if screen is open, even if tile entity isn't loaded yet
+				if (client.currentScreen instanceof MainScreen mainScreen) {
+					mainScreen.updateData(seconds, selectedPlatforms, announcementEntries);
 				}
 			});
 		});

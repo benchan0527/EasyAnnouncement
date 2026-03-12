@@ -118,7 +118,7 @@ Create a JSON file and refer to the following example:
 |-----------|-------------|
 | `"sounds"` | Required field |
 | `"soundPath"` | Audio file path |
-| `"duration"` | Audio length + interval |
+| `"duration"` | [NOT USED] Audio length - currently not used, only delaySeconds from GUI is used |
 
 ### 4. Dynamic Variables
 

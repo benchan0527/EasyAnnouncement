@@ -10,22 +10,41 @@ import net.minecraft.network.PacketByteBuf;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.world.chunk.Chunk;
+import net.minecraft.block.entity.BlockEntity;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
 
 public class AnnounceSendToClient {
+    private static final Logger LOGGER = LoggerFactory.getLogger("EasyAnnouncement");
     public static final Identifier ID = new Identifier(Easyannouncement.MOD_ID, "announce_update");
     public static final Identifier ANNOUNCE_START_ID = new Identifier(Easyannouncement.MOD_ID, "announce_start");
 
     public static void sendToClient(ServerPlayerEntity player, BlockPos pos, int seconds, List<Long> selectedPlatforms, List<AnnouncementEntry> announcementEntries) {
         // Use default values for backward compatibility
-        sendToClient(player, pos, seconds, selectedPlatforms, announcementEntries, 2.0F, 64, "LINEAR", false, -100, -64, -100, 100, 320, 100, "EXACT");
+        sendToClient(player, pos, seconds, selectedPlatforms, announcementEntries, 2.0F, 64, "LINEAR", false, -100, -64, -100, 100, 320, 100, "EXACT", false, false);
     }
     
     public static void sendToClient(ServerPlayerEntity player, BlockPos pos, int seconds, List<Long> selectedPlatforms, List<AnnouncementEntry> announcementEntries, 
                                    float volume, int range, String attenuationType, boolean boundingBoxEnabled,
-                                   int startX, int startY, int startZ, int endX, int endY, int endZ, String triggerMode) {
+                                   int startX, int startY, int startZ, int endX, int endY, int endZ) {
+        sendToClient(player, pos, seconds, selectedPlatforms, announcementEntries, volume, range, attenuationType, boundingBoxEnabled,
+            startX, startY, startZ, endX, endY, endZ, "EXACT", false, false);
+    }
+
+    public static void sendToClient(ServerPlayerEntity player, BlockPos pos, int seconds, List<Long> selectedPlatforms, List<AnnouncementEntry> announcementEntries,
+                                   float volume, int range, String attenuationType, boolean boundingBoxEnabled,
+                                   int startX, int startY, int startZ, int endX, int endY, int endZ, String triggerMode, boolean repeatMode) {
+        sendToClient(player, pos, seconds, selectedPlatforms, announcementEntries, volume, range, attenuationType, boundingBoxEnabled,
+            startX, startY, startZ, endX, endY, endZ, triggerMode, repeatMode, false);
+    }
+
+    public static void sendToClient(ServerPlayerEntity player, BlockPos pos, int seconds, List<Long> selectedPlatforms, List<AnnouncementEntry> announcementEntries,
+                                   float volume, int range, String attenuationType, boolean boundingBoxEnabled,
+                                   int startX, int startY, int startZ, int endX, int endY, int endZ, String triggerMode, boolean repeatMode, boolean excludePlayersAbove) {
         PacketByteBuf buf = PacketByteBufs.create();
         buf.writeBlockPos(pos);
         buf.writeInt(seconds);
@@ -51,9 +70,15 @@ public class AnnounceSendToClient {
         buf.writeInt(endX);
         buf.writeInt(endY);
         buf.writeInt(endZ);
+
+        // Write trigger mode
+        buf.writeString(triggerMode);
+
+        // Write repeat mode
+        buf.writeBoolean(repeatMode);
         
-        // Write trigger mode (new)
-        buf.writeString(triggerMode == null ? "EXACT" : triggerMode);
+        // Write exclude players above setting
+        buf.writeBoolean(excludePlayersAbove);
         
         ServerPlayNetworking.send(player, ID, buf);
     }
@@ -126,6 +151,34 @@ public class AnnounceSendToClient {
         sendAnnounceStartPacket(player, selectedPlatforms, pos, entries, destination, routeType, hh, mm);
     }
 
+    // Packet ID for announcement finished notification (Client -> Server)
+    public static final Identifier ANNOUNCEMENT_FINISHED_ID = new Identifier(Easyannouncement.MOD_ID, "announcement_finished");
+
+    /**
+     * Register server-side handler for announcement finished packets from client
+     */
+    public static void registerAnnouncementFinishedHandler() {
+        ServerPlayNetworking.registerGlobalReceiver(ANNOUNCEMENT_FINISHED_ID, (server, player, handler, buf, sender) -> {
+            BlockPos pos = buf.readBlockPos();
+            
+            server.execute(() -> {
+                // Try to get chunk first to ensure it's loaded
+                Chunk chunk = player.getWorld().getChunk(pos);
+                if (chunk == null) {
+                    LOGGER.warn("[EasyAnnouncement] Chunk not loaded for announcement finished at {}", pos);
+                    return;
+                }
+                
+                BlockEntity blockEntity = chunk.getBlockEntity(pos);
+                if (blockEntity instanceof AnnounceTile announceTile) {
+                    announceTile.onAnnouncementFinished();
+                } else {
+                    LOGGER.warn("[EasyAnnouncement] Block entity not found or wrong type at {} for announcement finished", pos);
+                }
+            });
+        });
+    }
+
     public static void register() {
         ServerPlayNetworking.registerGlobalReceiver(ID, (server, player, handler, buf, sender) -> {
             BlockPos pos = buf.readBlockPos();
@@ -143,6 +196,7 @@ public class AnnounceSendToClient {
             boolean boundingBoxEnabled = false;
             int startX = -100, startY = -64, startZ = -100, endX = 100, endY = 320, endZ = 100;
             String triggerMode = "EXACT";
+            boolean repeatMode = false;
             
             // Backward-compatible parsing
             if (buf.readableBytes() >= 4) {
@@ -196,6 +250,17 @@ public class AnnounceSendToClient {
                 } catch (Exception ignored) {}
             }
 
+            // Repeat mode (optional in older clients)
+            if (buf.readableBytes() >= 1) {
+                repeatMode = buf.readBoolean();
+            }
+
+            // Exclude players above setting (optional in older clients)
+            boolean excludePlayersAbove = false;
+            if (buf.readableBytes() >= 1) {
+                excludePlayersAbove = buf.readBoolean();
+            }
+
             final float volumeFinal = volume;
             final int rangeFinal = range;
             final String attenuationTypeFinal = attenuationType;
@@ -207,6 +272,8 @@ public class AnnounceSendToClient {
             final int endYFinal = endY;
             final int endZFinal = endZ;
             final String triggerModeFinal = triggerMode;
+            final boolean repeatModeFinal = repeatMode;
+            final boolean excludePlayersAboveFinal = excludePlayersAbove;
 
             server.execute(() -> {
                 if (player.getWorld().getBlockEntity(pos) instanceof AnnounceTile announceTile) {
@@ -225,6 +292,8 @@ public class AnnounceSendToClient {
                         announceTile.setEndY(endYFinal);
                         announceTile.setEndZ(endZFinal);
                         announceTile.setTriggerMode(triggerModeFinal);
+                        announceTile.setRepeatMode(repeatModeFinal);
+                        announceTile.setExcludePlayersAbove(excludePlayersAboveFinal);
                     }
                     announceTile.markDirty();
                 }

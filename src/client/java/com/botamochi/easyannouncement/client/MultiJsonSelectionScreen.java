@@ -12,6 +12,8 @@ import net.minecraft.util.Identifier;
 import net.minecraft.resource.Resource;
 import net.minecraft.resource.ResourceManager;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -91,48 +93,46 @@ public class MultiJsonSelectionScreen extends Screen {
     private void loadAvailableJsonFiles() {
         availableJsonFiles = new ArrayList<>();
         
-        // Step 1: Load JSON sequence files ONLY from easyannouncement namespace
-        try {
-            ResourceManager rm = MinecraftClient.getInstance().getResourceManager();
-            for (Identifier id : rm.findResources("sounds", path -> {
-                String pathStr = path.getPath();
-                // Must end with .json but NOT be sounds.json itself
-                return pathStr.endsWith(".json") && !pathStr.endsWith("sounds.json");
-            }).keySet()) {
-                if (!"easyannouncement".equals(id.getNamespace())) {
-                    continue; // restrict JSON sequences to easyannouncement only
-                }
-                String jsonName = id.getPath().replace("sounds/", "").replace(".json", "");
-                String namespaced = id.getNamespace() + ":" + jsonName;
-                if (!availableJsonFiles.contains(namespaced)) {
-                    availableJsonFiles.add(namespaced);
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("[EasyAnnouncement] Failed to load JSON sequence files: " + e.getMessage());
-        }
+        // Load sounds efficiently - only sounds.json and actual sound files
+        // Skip JSON sequence files (they are handled differently)
         
-        // Step 2: Load individual sound events from ALL namespaces' sounds.json
         try {
             ResourceManager rm = MinecraftClient.getInstance().getResourceManager();
             Set<String> namespaces = rm.getAllNamespaces();
             
             for (String ns : namespaces) {
                 try {
+                    // Step 1: Load from sounds.json (most important - this defines sound events)
                     Identifier soundsJsonId = new Identifier(ns, "sounds.json");
                     Optional<Resource> resOpt = rm.getResource(soundsJsonId);
                     if (resOpt.isPresent()) {
                         try (InputStream in = resOpt.get().getInputStream();
                              InputStreamReader reader = new InputStreamReader(in, StandardCharsets.UTF_8)) {
                             JsonObject obj = JsonParser.parseReader(reader).getAsJsonObject();
-                            for (String key : obj.keySet()) {
-                                String namespaced = ns + ":" + key;
+                            parseSoundEvents(ns, obj, "");
+                        } catch (Exception parseError) {
+                            // Silently ignore parse errors
+                        }
+                    }
+                    
+                    // Step 2: Load sound files directly from sounds folder
+                    // Only do this for a limited set of namespaces to avoid slow scanning
+                    // Focus on common namespaces that might have uncategorized sounds
+                    if (ns.equals("minecraft") || ns.equals("mtr")) {
+                        for (Identifier id : rm.findResources("sounds", path -> {
+                            String pathStr = path.getPath().toLowerCase();
+                            return pathStr.endsWith(".ogg") || pathStr.endsWith(".mp3") || 
+                                   pathStr.endsWith(".wav") || pathStr.endsWith(".flac");
+                        }).keySet()) {
+                            if (ns.equals(id.getNamespace())) {
+                                String path = id.getPath();
+                                String soundName = path.replace("sounds/", "").replaceAll("\\.(ogg|mp3|wav|flac)$", "");
+                                String namespaced = ns + ":" + soundName;
+                                
                                 if (!availableJsonFiles.contains(namespaced)) {
                                     availableJsonFiles.add(namespaced);
                                 }
                             }
-                        } catch (Exception parseError) {
-                            System.err.println("[EasyAnnouncement] Failed to parse sounds.json (" + ns + "): " + parseError.getMessage());
                         }
                     }
                 } catch (Exception nsError) {
@@ -140,13 +140,119 @@ public class MultiJsonSelectionScreen extends Screen {
                 }
             }
         } catch (Exception e) {
-            System.err.println("[EasyAnnouncement] Failed to load sound events: " + e.getMessage());
+            System.err.println("[EasyAnnouncement] Failed to load sounds: " + e.getMessage());
         }
         
         // Sort the list for better organization
         availableJsonFiles.sort(String::compareToIgnoreCase);
         
-        System.out.println("[EasyAnnouncement] Loaded " + availableJsonFiles.size() + " available sounds/JSON files");
+        System.out.println("[EasyAnnouncement] Loaded " + availableJsonFiles.size() + " sounds from sounds.json");
+    }
+    
+    /**
+     * Recursively parse sounds.json to find all sound event names
+     * Handles nested structures in Minecraft's sounds.json format
+     */
+    private void parseSoundEvents(String namespace, JsonObject obj, String prefix) {
+        for (String key : obj.keySet()) {
+            JsonElement element = obj.get(key);
+            
+            if (element.isJsonPrimitive()) {
+                // Direct sound reference like "sounds": "path/to/sound"
+                String soundPath = element.getAsString();
+                // Extract just the sound name without extension
+                String soundName = soundPath;
+                if (soundName.contains("/")) {
+                    soundName = soundName.substring(soundName.lastIndexOf("/") + 1);
+                }
+                if (soundName.endsWith(".ogg")) {
+                    soundName = soundName.replace(".ogg", "");
+                }
+                String namespaced = namespace + ":" + prefix + key;
+                if (!availableJsonFiles.contains(namespaced)) {
+                    availableJsonFiles.add(namespaced);
+                }
+            } else if (element.isJsonArray()) {
+                // Array of sounds like "sounds": ["sound1", "sound2"]
+                JsonArray arr = element.getAsJsonArray();
+                for (JsonElement arrElement : arr) {
+                    if (arrElement.isJsonPrimitive()) {
+                        String soundPath = arrElement.getAsString();
+                        String soundName = soundPath;
+                        if (soundName.contains("/")) {
+                            soundName = soundName.substring(soundName.lastIndexOf("/") + 1);
+                        }
+                        if (soundName.endsWith(".ogg")) {
+                            soundName = soundName.replace(".ogg", "");
+                        }
+                        String namespaced = namespace + ":" + prefix + key;
+                        if (!availableJsonFiles.contains(namespaced)) {
+                            availableJsonFiles.add(namespaced);
+                        }
+                    }
+                }
+            } else if (element.isJsonObject()) {
+                // Nested object like "music": { "sounds": [...] }
+                JsonObject nestedObj = element.getAsJsonObject();
+                if (nestedObj.has("sounds")) {
+                    // This is a sound event definition with a "sounds" array
+                    JsonElement soundsElement = nestedObj.get("sounds");
+                    if (soundsElement.isJsonArray()) {
+                        JsonArray soundsArr = soundsElement.getAsJsonArray();
+                        for (JsonElement soundElem : soundsArr) {
+                            if (soundElem.isJsonPrimitive()) {
+                                String soundPath = soundElem.getAsString();
+                                String soundName = soundPath;
+                                if (soundName.contains("/")) {
+                                    soundName = soundName.substring(soundName.lastIndexOf("/") + 1);
+                                }
+                                if (soundName.endsWith(".ogg")) {
+                                    soundName = soundName.replace(".ogg", "");
+                                }
+                                String namespaced = namespace + ":" + prefix + key;
+                                if (!availableJsonFiles.contains(namespaced)) {
+                                    availableJsonFiles.add(namespaced);
+                                }
+                            } else if (soundElem.isJsonObject()) {
+                                // Object with "name" field like { "name": "path/to/sound", "volume": 1.0 }
+                                JsonObject soundObj = soundElem.getAsJsonObject();
+                                if (soundObj.has("name")) {
+                                    String soundPath = soundObj.get("name").getAsString();
+                                    String soundName = soundPath;
+                                    if (soundName.contains("/")) {
+                                        soundName = soundName.substring(soundName.lastIndexOf("/") + 1);
+                                    }
+                                    if (soundName.endsWith(".ogg")) {
+                                        soundName = soundName.replace(".ogg", "");
+                                    }
+                                    String namespaced = namespace + ":" + prefix + key;
+                                    if (!availableJsonFiles.contains(namespaced)) {
+                                        availableJsonFiles.add(namespaced);
+                                    }
+                                }
+                            }
+                        }
+                    } else if (soundsElement.isJsonPrimitive()) {
+                        // Single sound string
+                        String soundPath = soundsElement.getAsString();
+                        String soundName = soundPath;
+                        if (soundName.contains("/")) {
+                            soundName = soundName.substring(soundName.lastIndexOf("/") + 1);
+                        }
+                        if (soundName.endsWith(".ogg")) {
+                            soundName = soundName.replace(".ogg", "");
+                        }
+                        String namespaced = namespace + ":" + prefix + key;
+                        if (!availableJsonFiles.contains(namespaced)) {
+                            availableJsonFiles.add(namespaced);
+                        }
+                    }
+                } else {
+                    // Other nested object, recurse with prefix
+                    parseSoundEvents(namespace, nestedObj, prefix + key + ".");
+                }
+            }
+        }
     }
 
     @Override
