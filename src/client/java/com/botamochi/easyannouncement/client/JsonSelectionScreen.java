@@ -5,6 +5,7 @@ import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.text.Text;
+import net.minecraft.client.gui.DrawContext;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -98,9 +99,8 @@ public class JsonSelectionScreen extends Screen {
             String jsonName = filteredJsonFiles.get(fileIndex);
             int y = listStartY + i * spacing;
             String displayText = jsonName.isEmpty() ? Text.translatable("gui.easyannouncement.empty").getString() : jsonName;
-            ButtonWidget jsonButton = new ButtonWidget(x, y, buttonWidth, buttonHeight,
-                Text.literal(displayText),
-                button -> selectJson(jsonName));
+            ButtonWidget jsonButton = ButtonWidget.builder(Text.literal(displayText), button -> selectJson(jsonName))
+                .dimensions(x, y, buttonWidth, buttonHeight).build();
             
             jsonButtons.add(jsonButton);
             addDrawableChild(jsonButton);
@@ -108,14 +108,12 @@ public class JsonSelectionScreen extends Screen {
         
         int bottomY = Math.min(this.height - 30, listStartY + maxVisibleItems * spacing + 20);
         
-        ButtonWidget clearButton = new ButtonWidget(x, bottomY, buttonWidth, buttonHeight,
-            Text.translatable("gui.easyannouncement.clear"),
-            button -> clearSearch());
+        ButtonWidget clearButton = ButtonWidget.builder(Text.translatable("gui.easyannouncement.clear"), button -> clearSearch())
+            .dimensions(x, bottomY, buttonWidth, buttonHeight).build();
         addDrawableChild(clearButton);
         
-        cancelButton = new ButtonWidget(x, bottomY + yOffset, buttonWidth, buttonHeight,
-            Text.translatable("gui.easyannouncement.cancel"),
-            button -> close());
+        cancelButton = ButtonWidget.builder(Text.translatable("gui.easyannouncement.cancel"), button -> close())
+            .dimensions(x, bottomY + yOffset, buttonWidth, buttonHeight).build();
         addDrawableChild(cancelButton);
         
         setFocused(searchField);
@@ -148,9 +146,8 @@ public class JsonSelectionScreen extends Screen {
             String jsonName = filteredJsonFiles.get(fileIndex);
             int y = listStartY + i * spacing;
             String displayText = jsonName.isEmpty() ? Text.translatable("gui.easyannouncement.empty").getString() : jsonName;
-            ButtonWidget jsonButton = new ButtonWidget(x, y, buttonWidth, buttonHeight,
-                Text.literal(displayText),
-                button -> selectJson(jsonName));
+            ButtonWidget jsonButton = ButtonWidget.builder(Text.literal(displayText), button -> selectJson(jsonName))
+                .dimensions(x, y, buttonWidth, buttonHeight).build();
             jsonButtons.add(jsonButton);
             addDrawableChild(jsonButton);
         }
@@ -209,9 +206,9 @@ public class JsonSelectionScreen extends Screen {
     }
 
     @Override
-    public void render(MatrixStack matrices, int mouseX, int mouseY, float delta) {
-        this.renderBackground(matrices);
-        drawCenteredText(matrices, textRenderer, title, width / 2, 15, 0xFFFFFF);
+    public void render(DrawContext context, int mouseX, int mouseY, float delta) {
+        this.renderBackground(context);
+        context.drawCenteredTextWithShadow(textRenderer, title, width / 2, 15, 0xFFFFFF);
         
         // Draw a minimal scrollbar if needed
         int totalItems = filteredJsonFiles.size();
@@ -232,13 +229,13 @@ public class JsonSelectionScreen extends Screen {
                 thumbY = trackTop + (int)Math.round((double)(trackHeight - thumbHeight) * scrollOffset / maxOffset);
             }
             // Track
-            fill(matrices, trackX, trackTop, trackX + 4, trackTop + trackHeight, 0xFF666666);
+            context.fill(trackX, trackTop, trackX + 4, trackTop + trackHeight, 0xFF666666);
             // Thumb
             int thumbColor = draggingScrollbar ? 0xFFAAAAAA : 0xFF888888;
-            fill(matrices, trackX, thumbY, trackX + 4, thumbY + thumbHeight, thumbColor);
+            context.fill(trackX, thumbY, trackX + 4, thumbY + thumbHeight, thumbColor);
         }
         
-        super.render(matrices, mouseX, mouseY, delta);
+        super.render(context, mouseX, mouseY, delta);
     }
 
     private void setScrollOffset(int newOffset) {
@@ -299,55 +296,8 @@ public class JsonSelectionScreen extends Screen {
     }
 
     @Override
-    public boolean mouseDragged(double mouseX, double mouseY, int button, double deltaX, double deltaY) {
-        if (draggingScrollbar) {
-            setScrollOffset(computeOffsetFromMouseY(mouseY));
-            return true;
-        }
-        return super.mouseDragged(mouseX, mouseY, button, deltaX, deltaY);
-    }
-
-    @Override
     public boolean mouseReleased(double mouseX, double mouseY, int button) {
-        if (draggingScrollbar && button == 0) {
-            draggingScrollbar = false;
-            return true;
-        }
+        draggingScrollbar = false;
         return super.mouseReleased(mouseX, mouseY, button);
     }
-    
-    private void drawBorder(MatrixStack matrices, int x, int y, int width, int height, int color) {
-        fill(matrices, x, y, x + width, y + 1, color);
-        fill(matrices, x, y + height - 1, x + width, y + height, color);
-        fill(matrices, x, y, x + 1, y + height, color);
-        fill(matrices, x + width - 1, y, x + width, y + height, color);
-    }
-
-    @Override
-    public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
-        // ESC key to close
-        if (keyCode == 256) { // GLFW_KEY_ESCAPE
-            close();
-            return true;
-        }
-        
-        // Arrow keys for navigation when not in search field
-        if (searchField != null && !searchField.isFocused()) {
-            if (keyCode == 265) { // GLFW_KEY_UP
-                scrollUp();
-                return true;
-            }
-            if (keyCode == 264) { // GLFW_KEY_DOWN
-                scrollDown();
-                return true;
-            }
-        }
-        
-        // Let search field handle key presses first
-        if (searchField != null && searchField.keyPressed(keyCode, scanCode, modifiers)) {
-            return true;
-        }
-        
-        return super.keyPressed(keyCode, scanCode, modifiers);
-    }
-} 
+}

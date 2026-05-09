@@ -48,7 +48,9 @@
   "gui.easyannouncement.copy_failed": "复制失败",
   "gui.easyannouncement.clipboard_empty": "剪贴板为空",
   "gui.easyannouncement.clipboard_not_text": "剪贴板内容不是文本",
-  "gui.easyannouncement.repeat_mode": "重复播放（循环）",
+  "gui.easyannouncement.trigger_json_selection": "列车触发广播设置",
+  "gui.easyannouncement.repeat_json_selection": "循环广播设置",
+  "gui.easyannouncement.repeat_interval_input": "循环间隔（秒）",
   "gui.easyannouncement.exclude_players_above": "排除方块以上的玩家",
 
   "announcement.easyannouncement.mtr_time_greeting": "现在时间为%s，欢迎来到%s站",

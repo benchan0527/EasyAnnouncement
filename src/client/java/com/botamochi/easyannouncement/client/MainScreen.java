@@ -1,5 +1,6 @@
 package com.botamochi.easyannouncement.client;
 
+import com.botamochi.easyannouncement.Easyannouncement;
 import com.botamochi.easyannouncement.data.AnnouncementEntry;
 import com.botamochi.easyannouncement.network.AnnounceSendToClient;
 import com.botamochi.easyannouncement.screen.MainScreenHandler;
@@ -13,7 +14,7 @@ import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.CheckboxWidget;
 import net.minecraft.client.gui.widget.SliderWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
-import net.minecraft.client.util.math.MatrixStack;
+import net.minecraft.client.gui.DrawContext;
 import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.network.PacketByteBuf;
 import net.minecraft.text.Text;
@@ -23,11 +24,13 @@ import net.minecraft.util.math.BlockPos;
 import org.lwjgl.glfw.GLFW;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 public class MainScreen extends Screen implements ScreenHandlerProvider<MainScreenHandler> {
     private final MainScreenHandler handler;
     private List<Long> selectedPlatforms = new ArrayList<>();
     public TextFieldWidget secondsField;
+    public TextFieldWidget repeatIntervalField;
     
     // Sound configuration widgets
     private SliderWidget volumeSlider;
@@ -47,81 +50,148 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
     
     // XYZ coordinate input fields
     private int scrollOffset = 0;
-    private static final int MIN_SCREEN_HEIGHT = 400;
-    private static final int CONTENT_HEIGHT = 480; // Total height needed for all elements (increased for repeat mode)
-    private ButtonWidget scrollUpButton;
-    private ButtonWidget scrollDownButton;
+    private static final int MIN_SCREEN_HEIGHT = 240; // Lower threshold to enable scrolling
+    private static final int CONTENT_HEIGHT = 520; // Total height needed for all elements
 
-    // Repeat mode
-    private CheckboxWidget repeatModeCheckbox;
-    
+    // Repeat entries UI
+    private List<AnnouncementEntry> workingTriggerEntries = new ArrayList<>();
+    private List<AnnouncementEntry> workingRepeatEntries = new ArrayList<>();
+
     // Exclude players above the block
     private CheckboxWidget excludePlayersAboveCheckbox;
+    
+    // Legacy migration flag - if true, auto-select all platforms when opening PlatformSelectionScreen
+    private boolean needsLegacyMigration = false;
 
     public MainScreen(MainScreenHandler handler, PlayerInventory inventory, Text title) {
         super(title);
         this.handler = handler;
     }
 
+    // Refresh data from AnnounceTile when screen is opened/reshown
+    private void refreshFromTile() {
+        AnnounceTile announceTile = getAnnounceTile();
+        if (announceTile != null) {
+            selectedPlatforms = announceTile.getSelectedPlatformIds();
+        }
+    }
+
     @Override
     protected void init() {
+        // Refresh data from tile when screen initializes
+        refreshFromTile();
+
         this.clearChildren();
-        int buttonWidth = 200;
+        
+        // Calculate dynamic button width and spacing based on screen size
+        int buttonWidth = Math.min(200, this.width - 40);
         int buttonHeight = 20;
         int x = this.width / 2 - buttonWidth / 2;
-        int yStart = 15; // Start much higher on screen
-        int yOffset = 40;
         
-        // Check if scrolling is needed
-        boolean needsScrolling = this.height < MIN_SCREEN_HEIGHT;
-        if (needsScrolling) {
-            yStart = 10; // Even smaller top margin when scrolling
-            yOffset = 35; // Compact spacing when scrolling
-        }
+        // Adjust spacing based on screen height
+        int totalContentHeight = 14 * 30 + 80; // Approximate height of all elements
+        int yOffset = (this.height - 60) / 14; // Distribute elements evenly
+        yOffset = Math.max(22, Math.min(yOffset, 30)); // Clamp between 22-30
+        int yStart = 20;
 
         AnnounceTile announceTile = getAnnounceTile();
         if (announceTile != null) {
             selectedPlatforms = announceTile.getSelectedPlatformIds();
+            needsLegacyMigration = announceTile.needsLegacyMigration();
+            // Load entries - first list is trigger, second is repeat
+            workingTriggerEntries = new ArrayList<>();
+            for (AnnouncementEntry entry : announceTile.getAnnouncementEntries()) {
+                workingTriggerEntries.add(entry.copy());
+            }
+            workingRepeatEntries = new ArrayList<>();
+            for (AnnouncementEntry entry : announceTile.getRepeatEntries()) {
+                workingRepeatEntries.add(entry.copy());
+            }
             secondsField = new TextFieldWidget(textRenderer, x, yStart + 2 * yOffset - scrollOffset, buttonWidth, buttonHeight, Text.translatable("gui.easyannouncement.seconds_input"));
             secondsField.setMaxLength(3);
             secondsField.setText(String.valueOf(announceTile.getSeconds()));
-            secondsField.setChangedListener(text -> autoSave()); // Auto-save on change
+            secondsField.setChangedListener(text -> autoSave());
             if (isElementVisible(yStart + 2 * yOffset - scrollOffset, buttonHeight)) {
                 this.addDrawableChild(secondsField);
             }
         }
 
         // Platform Selection Button
-        ButtonWidget platformButton = new ButtonWidget(x, yStart - scrollOffset, buttonWidth, buttonHeight, Text.translatable("gui.easyannouncement.platform_selection"), button -> {
+        ButtonWidget platformButton = ButtonWidget.builder(Text.translatable("gui.easyannouncement.platform_selection"), button -> {
             if (announceTile != null) {
                 autoSave(); // Save before opening child screen
-                this.client.setScreen(new PlatformSelectionScreen(announceTile.getPos(), announceTile.getSelectedPlatformIds()));
+                this.client.setScreen(new PlatformSelectionScreen(announceTile.getPos(), announceTile.getSelectedPlatformIds(), announceTile.needsLegacyMigration()));
             }
-        });
+        }).dimensions(x, yStart - scrollOffset, buttonWidth, buttonHeight).build();
         if (isElementVisible(yStart - scrollOffset, buttonHeight)) {
             this.addDrawableChild(platformButton);
         }
 
+        // Check if scrolling is needed based on content height vs screen height
+        boolean needsScrolling = this.height < CONTENT_HEIGHT;
+
         // Route Selection Button
-        ButtonWidget routeButton = new ButtonWidget(x, yStart + (needsScrolling ? 1 : 1) * yOffset - scrollOffset, buttonWidth, buttonHeight, Text.translatable("gui.easyannouncement.route_selection"), button -> {
+        ButtonWidget routeButton = ButtonWidget.builder(Text.translatable("gui.easyannouncement.route_selection"), button -> {
             if (announceTile != null) {
                 autoSave(); // Save before opening child screen
                 this.client.setScreen(new RouteSelectionScreen(announceTile.getPos(), announceTile.getSelectedPlatformIds()));
             }
-        });
-        if (isElementVisible(yStart + (needsScrolling ? 1 : 1) * yOffset - scrollOffset, buttonHeight)) {
+        }).dimensions(x, yStart + 1 * yOffset - scrollOffset, buttonWidth, buttonHeight).build();
+        if (isElementVisible(yStart + 1 * yOffset - scrollOffset, buttonHeight)) {
             this.addDrawableChild(routeButton);
         }
 
-        // Multi-JSON Selection Button
-        ButtonWidget multiJsonButton = new ButtonWidget(x, yStart + 3 * yOffset - scrollOffset, buttonWidth, buttonHeight, Text.translatable("gui.easyannouncement.multi_json_selection"), button -> {
+        // Trigger JSON Selection Button
+        ButtonWidget triggerJsonButton = ButtonWidget.builder(Text.translatable("gui.easyannouncement.trigger_json_selection"), button -> {
             if (announceTile != null) {
-                autoSave(); // Save before opening child screen
-                this.client.setScreen(new MultiJsonSelectionScreen(announceTile, this));
+                autoSave();
+                this.client.setScreen(new MultiJsonSelectionScreen(announceTile, this, workingTriggerEntries, Text.translatable("gui.easyannouncement.trigger_json_selection"), entries -> {
+                    workingTriggerEntries = entries;
+                    announceTile.setAnnouncementEntries(entries);
+                    announceTile.markDirty();
+                    client.setScreen(this);
+                    // Save to server AFTER returning from selection screen
+                    autoSave();
+                }));
             }
-        });
+        }).dimensions(x, yStart + 3 * yOffset - scrollOffset, buttonWidth, buttonHeight).build();
         if (isElementVisible(yStart + 3 * yOffset - scrollOffset, buttonHeight)) {
-            this.addDrawableChild(multiJsonButton);
+            this.addDrawableChild(triggerJsonButton);
+        }
+
+        // Repeat JSON Selection Button
+        ButtonWidget repeatJsonButton = ButtonWidget.builder(Text.translatable("gui.easyannouncement.repeat_json_selection"), button -> {
+            if (announceTile != null) {
+                autoSave();
+                this.client.setScreen(new MultiJsonSelectionScreen(announceTile, this, workingRepeatEntries, Text.translatable("gui.easyannouncement.repeat_json_selection"), entries -> {
+                    workingRepeatEntries = entries;
+                    announceTile.setRepeatEntries(entries);
+                    // Only auto-fill interval if user hasn't manually set it
+                    if (repeatIntervalField != null && repeatIntervalField.getText().isEmpty()) {
+                        int repeatIntervalSeconds = AnnounceReceiveFromServer.calculateRepeatIntervalSeconds(entries);
+                        announceTile.setRepeatIntervalSeconds(repeatIntervalSeconds);
+                        repeatIntervalField.setText(String.valueOf(repeatIntervalSeconds));
+                    }
+                    announceTile.markDirty();
+                    client.setScreen(this);
+                    // Save to server AFTER returning from selection screen
+                    autoSave();
+                }));
+            }
+        }).dimensions(x, yStart + 4 * yOffset - scrollOffset, buttonWidth, buttonHeight).build();
+        if (isElementVisible(yStart + 4 * yOffset - scrollOffset, buttonHeight)) {
+            this.addDrawableChild(repeatJsonButton);
+        }
+
+        // Repeat Interval Input Field
+        if (announceTile != null) {
+            repeatIntervalField = new TextFieldWidget(textRenderer, x, yStart + 5 * yOffset - scrollOffset, buttonWidth, buttonHeight, Text.translatable("gui.easyannouncement.repeat_interval_input"));
+            repeatIntervalField.setMaxLength(4);
+            repeatIntervalField.setText(String.valueOf(announceTile.getRepeatIntervalSeconds()));
+            repeatIntervalField.setChangedListener(text -> autoSave());
+            if (isElementVisible(yStart + 5 * yOffset - scrollOffset, buttonHeight)) {
+                this.addDrawableChild(repeatIntervalField);
+            }
         }
 
         // Sound Configuration Section
@@ -132,7 +202,7 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
             currentRange = announceTile.getSoundRange();
             
             // Volume Slider (0.1 - 3.0)
-            volumeSlider = new SliderWidget(x, yStart + 5 * yOffset - scrollOffset, buttonWidth, buttonHeight, 
+            volumeSlider = new SliderWidget(x, yStart + 6 * yOffset - scrollOffset, buttonWidth, buttonHeight, 
                 Text.translatable("gui.easyannouncement.volume_label", String.format("%.1f", announceTile.getSoundVolume())), 
                 (announceTile.getSoundVolume() - 0.1) / 2.9) {
                 @Override
@@ -146,12 +216,12 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
                     currentVolume = (float) (0.1 + this.value * 2.9);
                 }
             };
-            if (isElementVisible(yStart + 5 * yOffset - scrollOffset, buttonHeight)) {
+            if (isElementVisible(yStart + 6 * yOffset - scrollOffset, buttonHeight)) {
                 this.addDrawableChild(volumeSlider);
             }
             
             // Range Slider (16 - 128 blocks)
-            rangeSlider = new SliderWidget(x, yStart + 6 * yOffset - scrollOffset, buttonWidth, buttonHeight, 
+            rangeSlider = new SliderWidget(x, yStart + 7 * yOffset - scrollOffset, buttonWidth, buttonHeight, 
                 Text.translatable("gui.easyannouncement.range_label", announceTile.getSoundRange()), 
                 (announceTile.getSoundRange() - 16.0) / 112.0) {
                 @Override
@@ -167,28 +237,21 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
                     currentRange = range;
                 }
             };
-            if (isElementVisible(yStart + 6 * yOffset - scrollOffset, buttonHeight)) {
+            if (isElementVisible(yStart + 7 * yOffset - scrollOffset, buttonHeight)) {
                 this.addDrawableChild(rangeSlider);
             }
             
             // Bounding Box Checkbox
-            boundingBoxCheckbox = new CheckboxWidget(x, yStart + 7 * yOffset - scrollOffset, buttonWidth, buttonHeight,
+            boundingBoxCheckbox = new CheckboxWidget(x, yStart + 8 * yOffset - scrollOffset, buttonWidth, buttonHeight,
                 Text.translatable("gui.easyannouncement.enable_area_limit"), announceTile.isBoundingBoxEnabled());
-            if (isElementVisible(yStart + 7 * yOffset - scrollOffset, buttonHeight)) {
+            if (isElementVisible(yStart + 8 * yOffset - scrollOffset, buttonHeight)) {
                 this.addDrawableChild(boundingBoxCheckbox);
             }
 
-            // Repeat Mode Checkbox (placed after bounding box)
-            repeatModeCheckbox = new CheckboxWidget(x, yStart + 8 * yOffset - scrollOffset, buttonWidth, buttonHeight,
-                Text.translatable("gui.easyannouncement.repeat_mode"), announceTile.isRepeatMode());
-            if (isElementVisible(yStart + 8 * yOffset - scrollOffset, buttonHeight)) {
-                this.addDrawableChild(repeatModeCheckbox);
-            }
-
             // Exclude Players Above Checkbox (placed after repeat mode)
-            excludePlayersAboveCheckbox = new CheckboxWidget(x, yStart + 9 * yOffset - scrollOffset, buttonWidth, buttonHeight,
+            excludePlayersAboveCheckbox = new CheckboxWidget(x, yStart + 10 * yOffset - scrollOffset, buttonWidth, buttonHeight,
                 Text.translatable("gui.easyannouncement.exclude_players_above"), announceTile.isExcludePlayersAbove());
-            if (isElementVisible(yStart + 9 * yOffset - scrollOffset, buttonHeight)) {
+            if (isElementVisible(yStart + 10 * yOffset - scrollOffset, buttonHeight)) {
                 this.addDrawableChild(excludePlayersAboveCheckbox);
             }
 
@@ -198,47 +261,47 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
             int startXPos = x;
             int labelOffset = 10;
 
-            // Start coordinates (row 1) - Always create fields, conditionally add to screen
-            startXField = new TextFieldWidget(this.textRenderer, startXPos, yStart + 11 * yOffset - scrollOffset, fieldWidth, fieldHeight, Text.translatable("gui.easyannouncement.start_x"));
+            // Start coordinates (row 1)
+            startXField = new TextFieldWidget(this.textRenderer, startXPos, yStart + 12 * yOffset - scrollOffset, fieldWidth, fieldHeight, Text.translatable("gui.easyannouncement.start_x"));
             startXField.setText(String.valueOf(announceTile.getStartX()));
             startXField.setMaxLength(10);
-            if (isElementVisible(yStart + 11 * yOffset - scrollOffset, fieldHeight)) {
+            if (isElementVisible(yStart + 12 * yOffset - scrollOffset, fieldHeight)) {
                 this.addDrawableChild(startXField);
             }
 
-            startYField = new TextFieldWidget(this.textRenderer, startXPos + fieldWidth + labelOffset, yStart + 11 * yOffset - scrollOffset, fieldWidth, fieldHeight, Text.translatable("gui.easyannouncement.start_y"));
+            startYField = new TextFieldWidget(this.textRenderer, startXPos + fieldWidth + labelOffset, yStart + 12 * yOffset - scrollOffset, fieldWidth, fieldHeight, Text.translatable("gui.easyannouncement.start_y"));
             startYField.setText(String.valueOf(announceTile.getStartY()));
             startYField.setMaxLength(10);
-            if (isElementVisible(yStart + 11 * yOffset - scrollOffset, fieldHeight)) {
+            if (isElementVisible(yStart + 12 * yOffset - scrollOffset, fieldHeight)) {
                 this.addDrawableChild(startYField);
             }
 
-            startZField = new TextFieldWidget(this.textRenderer, startXPos + 2 * (fieldWidth + labelOffset), yStart + 11 * yOffset - scrollOffset, fieldWidth, fieldHeight, Text.translatable("gui.easyannouncement.start_z"));
+            startZField = new TextFieldWidget(this.textRenderer, startXPos + 2 * (fieldWidth + labelOffset), yStart + 12 * yOffset - scrollOffset, fieldWidth, fieldHeight, Text.translatable("gui.easyannouncement.start_z"));
             startZField.setText(String.valueOf(announceTile.getStartZ()));
             startZField.setMaxLength(10);
-            if (isElementVisible(yStart + 11 * yOffset - scrollOffset, fieldHeight)) {
+            if (isElementVisible(yStart + 12 * yOffset - scrollOffset, fieldHeight)) {
                 this.addDrawableChild(startZField);
             }
 
-            // End coordinates (row 2) - Always create fields, conditionally add to screen
-            endXField = new TextFieldWidget(this.textRenderer, startXPos, yStart + 12 * yOffset - scrollOffset, fieldWidth, fieldHeight, Text.translatable("gui.easyannouncement.end_x"));
+            // End coordinates (row 2)
+            endXField = new TextFieldWidget(this.textRenderer, startXPos, yStart + 13 * yOffset - scrollOffset, fieldWidth, fieldHeight, Text.translatable("gui.easyannouncement.end_x"));
             endXField.setText(String.valueOf(announceTile.getEndX()));
             endXField.setMaxLength(10);
-            if (isElementVisible(yStart + 12 * yOffset - scrollOffset, fieldHeight)) {
+            if (isElementVisible(yStart + 13 * yOffset - scrollOffset, fieldHeight)) {
                 this.addDrawableChild(endXField);
             }
 
-            endYField = new TextFieldWidget(this.textRenderer, startXPos + fieldWidth + labelOffset, yStart + 12 * yOffset - scrollOffset, fieldWidth, fieldHeight, Text.translatable("gui.easyannouncement.end_y"));
+            endYField = new TextFieldWidget(this.textRenderer, startXPos + fieldWidth + labelOffset, yStart + 13 * yOffset - scrollOffset, fieldWidth, fieldHeight, Text.translatable("gui.easyannouncement.end_y"));
             endYField.setText(String.valueOf(announceTile.getEndY()));
             endYField.setMaxLength(10);
-            if (isElementVisible(yStart + 12 * yOffset - scrollOffset, fieldHeight)) {
+            if (isElementVisible(yStart + 13 * yOffset - scrollOffset, fieldHeight)) {
                 this.addDrawableChild(endYField);
             }
 
-            endZField = new TextFieldWidget(this.textRenderer, startXPos + 2 * (fieldWidth + labelOffset), yStart + 12 * yOffset - scrollOffset, fieldWidth, fieldHeight, Text.translatable("gui.easyannouncement.end_z"));
+            endZField = new TextFieldWidget(this.textRenderer, startXPos + 2 * (fieldWidth + labelOffset), yStart + 13 * yOffset - scrollOffset, fieldWidth, fieldHeight, Text.translatable("gui.easyannouncement.end_z"));
             endZField.setText(String.valueOf(announceTile.getEndZ()));
             endZField.setMaxLength(10);
-            if (isElementVisible(yStart + 12 * yOffset - scrollOffset, fieldHeight)) {
+            if (isElementVisible(yStart + 13 * yOffset - scrollOffset, fieldHeight)) {
                 this.addDrawableChild(endZField);
             }
 
@@ -248,73 +311,55 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
             int buttonX = startXPos + 3 * (fieldWidth + labelOffset) + 10;
 
             // Copy All Positions Button
-            ButtonWidget copyAllButton = new ButtonWidget(buttonX, yStart + 11 * yOffset - scrollOffset, buttonSmallWidth, buttonSmallHeight,
-                Text.translatable("gui.easyannouncement.copy_all_positions"), button -> {
-                    copyAllPositions();
-                });
-            if (isElementVisible(yStart + 11 * yOffset - scrollOffset, buttonSmallHeight)) {
+            ButtonWidget copyAllButton = ButtonWidget.builder(Text.translatable("gui.easyannouncement.copy_all_positions"), button -> {
+                copyAllPositions();
+            }).dimensions(buttonX, yStart + 12 * yOffset - scrollOffset, buttonSmallWidth, buttonSmallHeight).build();
+            if (isElementVisible(yStart + 12 * yOffset - scrollOffset, buttonSmallHeight)) {
                 this.addDrawableChild(copyAllButton);
             }
 
             // Paste All Positions Button
-            ButtonWidget pasteAllButton = new ButtonWidget(buttonX, yStart + 12 * yOffset - scrollOffset, buttonSmallWidth, buttonSmallHeight,
-                Text.translatable("gui.easyannouncement.paste_all_positions"), button -> {
-                    pasteAllPositions();
-                });
-            if (isElementVisible(yStart + 12 * yOffset - scrollOffset, buttonSmallHeight)) {
+            ButtonWidget pasteAllButton = ButtonWidget.builder(Text.translatable("gui.easyannouncement.paste_all_positions"), button -> {
+                pasteAllPositions();
+            }).dimensions(buttonX, yStart + 13 * yOffset - scrollOffset, buttonSmallWidth, buttonSmallHeight).build();
+            if (isElementVisible(yStart + 13 * yOffset - scrollOffset, buttonSmallHeight)) {
                 this.addDrawableChild(pasteAllButton);
             }
         }
 
         // Done/Close Button - saves automatically when closed
-        ButtonWidget doneButton = new ButtonWidget(x, yStart + 13 * yOffset - scrollOffset, buttonWidth, buttonHeight, Text.translatable("gui.easyannouncement.done"), button -> {
+        ButtonWidget doneButton = ButtonWidget.builder(Text.translatable("gui.easyannouncement.done"), button -> {
             saveAndClose();
-        });
-        if (isElementVisible(yStart + 13 * yOffset - scrollOffset, buttonHeight)) {
+        }).dimensions(x, yStart + 14 * yOffset - scrollOffset, buttonWidth, buttonHeight).build();
+        if (isElementVisible(yStart + 14 * yOffset - scrollOffset, buttonHeight)) {
             this.addDrawableChild(doneButton);
         }
-        
-        // Add scroll buttons if needed
-        if (needsScrolling) {
-            addScrollButtons(x, buttonWidth, buttonHeight);
-        }
+        // Scroll functionality is handled by mouse wheel (mouseScrolled method)
+        // No scroll buttons needed - user can use mouse wheel or keyboard arrows
+    }
+    
+    // Reset scroll offset when screen is resized or initialized
+    @Override
+    public void resize(MinecraftClient client, int width, int height) {
+        this.scrollOffset = 0; // Reset scroll on resize
+        super.resize(client, width, height);
     }
     
     private boolean isElementVisible(int elementY, int elementHeight) {
         return elementY + elementHeight >= 0 && elementY <= this.height;
     }
     
-    private void addScrollButtons(int x, int buttonWidth, int buttonHeight) {
-        // Scroll Up Button
-        if (scrollOffset > 0) {
-            scrollUpButton = new ButtonWidget(x + buttonWidth + 10, 20, 20, buttonHeight, Text.of("↑"), button -> {
-                scrollOffset = Math.max(0, scrollOffset - 30);
-                this.init(); // Refresh the UI
-            });
-            this.addDrawableChild(scrollUpButton);
-        }
-        
-        // Scroll Down Button
-        int maxScrollOffset = Math.max(0, (CONTENT_HEIGHT + 40) - this.height + 40);
-        if (scrollOffset < maxScrollOffset) {
-            scrollDownButton = new ButtonWidget(x + buttonWidth + 10, 50, 20, buttonHeight, Text.of("↓"), button -> {
-                scrollOffset = Math.min(maxScrollOffset, scrollOffset + 30);
-                this.init(); // Refresh the UI
-            });
-            this.addDrawableChild(scrollDownButton);
-        }
-    }
-    
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double amount) {
-        if (this.height < MIN_SCREEN_HEIGHT) {
-            int maxScrollOffset = Math.max(0, (CONTENT_HEIGHT + 40) - this.height + 40);
+        int maxScrollOffset = Math.max(0, CONTENT_HEIGHT - this.height + 40);
+        
+        if (maxScrollOffset > 0) {
             int oldScrollOffset = scrollOffset;
             
             if (amount > 0) {
-                scrollOffset = Math.max(0, scrollOffset - 20);
+                scrollOffset = Math.max(0, scrollOffset - 30);
             } else {
-                scrollOffset = Math.min(maxScrollOffset, scrollOffset + 20);
+                scrollOffset = Math.min(maxScrollOffset, scrollOffset + 30);
             }
             
             if (oldScrollOffset != scrollOffset) {
@@ -338,21 +383,11 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
         if (announceTile != null && secondsField != null) {
             try {
                 int seconds = Integer.parseInt(secondsField.getText());
-                List<AnnouncementEntry> entries = announceTile.getAnnouncementEntries();
-
-                // Read slider values
                 float volume = currentVolume;
                 int range = currentRange;
+                if (volume < 0.1f || volume > 3.0f) volume = announceTile.getSoundVolume();
+                if (range < 16 || range > 128) range = announceTile.getSoundRange();
 
-                // Ensure we have valid values
-                if (volume < 0.1f || volume > 3.0f) {
-                    volume = announceTile.getSoundVolume();
-                }
-                if (range < 16 || range > 128) {
-                    range = announceTile.getSoundRange();
-                }
-
-                // Parse XYZ coordinates
                 int startX = announceTile.getStartX();
                 int startY = announceTile.getStartY();
                 int startZ = announceTile.getStartZ();
@@ -361,53 +396,52 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
                 int endZ = announceTile.getEndZ();
 
                 try {
-                    if (startXField != null && !startXField.getText().isEmpty()) {
-                        startX = Integer.parseInt(startXField.getText());
-                    }
+                    if (startXField != null && !startXField.getText().isEmpty()) startX = Integer.parseInt(startXField.getText());
                 } catch (NumberFormatException ignored) {}
                 try {
-                    if (startYField != null && !startYField.getText().isEmpty()) {
-                        startY = Integer.parseInt(startYField.getText());
-                    }
+                    if (startYField != null && !startYField.getText().isEmpty()) startY = Integer.parseInt(startYField.getText());
                 } catch (NumberFormatException ignored) {}
                 try {
-                    if (startZField != null && !startZField.getText().isEmpty()) {
-                        startZ = Integer.parseInt(startZField.getText());
-                    }
+                    if (startZField != null && !startZField.getText().isEmpty()) startZ = Integer.parseInt(startZField.getText());
                 } catch (NumberFormatException ignored) {}
                 try {
-                    if (endXField != null && !endXField.getText().isEmpty()) {
-                        endX = Integer.parseInt(endXField.getText());
-                    }
+                    if (endXField != null && !endXField.getText().isEmpty()) endX = Integer.parseInt(endXField.getText());
                 } catch (NumberFormatException ignored) {}
                 try {
-                    if (endYField != null && !endYField.getText().isEmpty()) {
-                        endY = Integer.parseInt(endYField.getText());
-                    }
+                    if (endYField != null && !endYField.getText().isEmpty()) endY = Integer.parseInt(endYField.getText());
                 } catch (NumberFormatException ignored) {}
                 try {
-                    if (endZField != null && !endZField.getText().isEmpty()) {
-                        endZ = Integer.parseInt(endZField.getText());
-                    }
+                    if (endZField != null && !endZField.getText().isEmpty()) endZ = Integer.parseInt(endZField.getText());
                 } catch (NumberFormatException ignored) {}
 
                 boolean boundingBoxEnabled = boundingBoxCheckbox != null ? boundingBoxCheckbox.isChecked() : announceTile.isBoundingBoxEnabled();
-                boolean repeatMode = repeatModeCheckbox != null ? repeatModeCheckbox.isChecked() : announceTile.isRepeatMode();
                 boolean excludePlayersAbove = excludePlayersAboveCheckbox != null ? excludePlayersAboveCheckbox.isChecked() : announceTile.isExcludePlayersAbove();
-                String triggerMode = announceTile.getTriggerMode(); // Always EXACT
+                String triggerMode = announceTile.getTriggerMode();
 
-                // Send update packet with all current values
-                sendUpdatePacket(announceTile.getPos(), seconds, selectedPlatforms, entries, volume, range, currentAttenuationType, boundingBoxEnabled, startX, startY, startZ, endX, endY, endZ, triggerMode, repeatMode, excludePlayersAbove);
+                List<AnnouncementEntry> triggerEntries = workingTriggerEntries.stream()
+                    .filter(entry -> !entry.isEmpty())
+                    .collect(Collectors.toList());
+                List<AnnouncementEntry> repeatEntries = workingRepeatEntries.stream()
+                    .filter(entry -> !entry.isEmpty())
+                    .collect(Collectors.toList());
+                int repeatIntervalSeconds;
+                if (repeatIntervalField != null && !repeatIntervalField.getText().trim().isEmpty()) {
+                    repeatIntervalSeconds = Math.max(1, Integer.parseInt(repeatIntervalField.getText().trim()));
+                } else {
+                    repeatIntervalSeconds = AnnounceReceiveFromServer.calculateRepeatIntervalSeconds(repeatEntries);
+                }
 
-                // Also update local tile immediately for responsive UI
+                sendUpdatePacket(announceTile.getPos(), seconds, selectedPlatforms, triggerEntries, repeatEntries, volume, range, currentAttenuationType, boundingBoxEnabled, startX, startY, startZ, endX, endY, endZ, triggerMode, excludePlayersAbove, repeatIntervalSeconds);
+
                 announceTile.setSeconds(seconds);
                 announceTile.setSelectedPlatformIds(selectedPlatforms);
-                announceTile.setAnnouncementEntries(entries);
+                announceTile.setAnnouncementEntries(triggerEntries);
+                announceTile.setRepeatEntries(repeatEntries);
+                announceTile.setRepeatIntervalSeconds(repeatIntervalSeconds);
                 announceTile.setSoundVolume(volume);
                 announceTile.setSoundRange(range);
                 announceTile.setAttenuationType(currentAttenuationType);
                 announceTile.setBoundingBoxEnabled(boundingBoxEnabled);
-                announceTile.setRepeatMode(repeatMode);
                 announceTile.setExcludePlayersAbove(excludePlayersAbove);
                 announceTile.setStartX(startX);
                 announceTile.setStartY(startY);
@@ -417,7 +451,6 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
                 announceTile.setEndZ(endZ);
                 this.close();
             } catch (NumberFormatException e) {
-                // Invalid seconds value - don't save
                 this.close();
             }
         } else {
@@ -425,24 +458,84 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
         }
     }
 
-    // Auto-save current settings to server
+    // Auto-save current settings to server (without closing)
     private void autoSave() {
-        saveAndClose();
+        AnnounceTile announceTile = getAnnounceTile();
+        if (announceTile != null && secondsField != null) {
+            try {
+                int seconds = Integer.parseInt(secondsField.getText());
+                float volume = currentVolume;
+                int range = currentRange;
+                if (volume < 0.1f || volume > 3.0f) volume = announceTile.getSoundVolume();
+                if (range < 16 || range > 128) range = announceTile.getSoundRange();
+
+                int startX = announceTile.getStartX();
+                int startY = announceTile.getStartY();
+                int startZ = announceTile.getStartZ();
+                int endX = announceTile.getEndX();
+                int endY = announceTile.getEndY();
+                int endZ = announceTile.getEndZ();
+
+                try {
+                    if (startXField != null && !startXField.getText().isEmpty()) startX = Integer.parseInt(startXField.getText());
+                } catch (NumberFormatException ignored) {}
+                try {
+                    if (startYField != null && !startYField.getText().isEmpty()) startY = Integer.parseInt(startYField.getText());
+                } catch (NumberFormatException ignored) {}
+                try {
+                    if (startZField != null && !startZField.getText().isEmpty()) startZ = Integer.parseInt(startZField.getText());
+                } catch (NumberFormatException ignored) {}
+                try {
+                    if (endXField != null && !endXField.getText().isEmpty()) endX = Integer.parseInt(endXField.getText());
+                } catch (NumberFormatException ignored) {}
+                try {
+                    if (endYField != null && !endYField.getText().isEmpty()) endY = Integer.parseInt(endYField.getText());
+                } catch (NumberFormatException ignored) {}
+                try {
+                    if (endZField != null && !endZField.getText().isEmpty()) endZ = Integer.parseInt(endZField.getText());
+                } catch (NumberFormatException ignored) {}
+
+                boolean boundingBoxEnabled = boundingBoxCheckbox != null ? boundingBoxCheckbox.isChecked() : announceTile.isBoundingBoxEnabled();
+                boolean excludePlayersAbove = excludePlayersAboveCheckbox != null ? excludePlayersAboveCheckbox.isChecked() : announceTile.isExcludePlayersAbove();
+                String triggerMode = announceTile.getTriggerMode();
+
+                List<AnnouncementEntry> triggerEntries = workingTriggerEntries.stream()
+                    .filter(entry -> !entry.isEmpty())
+                    .collect(Collectors.toList());
+                List<AnnouncementEntry> repeatEntries = workingRepeatEntries.stream()
+                    .filter(entry -> !entry.isEmpty())
+                    .collect(Collectors.toList());
+                int repeatIntervalSeconds;
+                if (repeatIntervalField != null && !repeatIntervalField.getText().trim().isEmpty()) {
+                    repeatIntervalSeconds = Math.max(1, Integer.parseInt(repeatIntervalField.getText().trim()));
+                } else {
+                    repeatIntervalSeconds = AnnounceReceiveFromServer.calculateRepeatIntervalSeconds(repeatEntries);
+                }
+
+                sendUpdatePacket(announceTile.getPos(), seconds, selectedPlatforms, triggerEntries, repeatEntries, volume, range, currentAttenuationType, boundingBoxEnabled, startX, startY, startZ, endX, endY, endZ, triggerMode, excludePlayersAbove, repeatIntervalSeconds);
+
+                announceTile.setSeconds(seconds);
+                announceTile.setSelectedPlatformIds(selectedPlatforms);
+                announceTile.setAnnouncementEntries(triggerEntries);
+                announceTile.setRepeatEntries(repeatEntries);
+                announceTile.setRepeatIntervalSeconds(repeatIntervalSeconds);
+                announceTile.setSoundVolume(volume);
+                announceTile.setSoundRange(range);
+                announceTile.setAttenuationType(currentAttenuationType);
+                announceTile.setBoundingBoxEnabled(boundingBoxEnabled);
+                announceTile.setExcludePlayersAbove(excludePlayersAbove);
+                announceTile.setStartX(startX);
+                announceTile.setStartY(startY);
+                announceTile.setStartZ(startZ);
+                announceTile.setEndX(endX);
+                announceTile.setEndY(endY);
+                announceTile.setEndZ(endZ);
+            } catch (NumberFormatException e) {
+            }
+        }
     }
 
-    private void sendUpdatePacket(BlockPos pos, int seconds, List<Long> selectedPlatforms, List<AnnouncementEntry> announcementEntries, float volume, int range, String attenuationType, boolean boundingBoxEnabled, int startX, int startY, int startZ, int endX, int endY, int endZ, boolean repeatMode) {
-        sendUpdatePacket(pos, seconds, selectedPlatforms, announcementEntries, volume, range, attenuationType, boundingBoxEnabled, startX, startY, startZ, endX, endY, endZ, "EXACT", repeatMode, false);
-    }
-
-    private void sendUpdatePacket(BlockPos pos, int seconds, List<Long> selectedPlatforms, List<AnnouncementEntry> announcementEntries, float volume, int range, String attenuationType, boolean boundingBoxEnabled, int startX, int startY, int startZ, int endX, int endY, int endZ, boolean repeatMode, boolean excludePlayersAbove) {
-        sendUpdatePacket(pos, seconds, selectedPlatforms, announcementEntries, volume, range, attenuationType, boundingBoxEnabled, startX, startY, startZ, endX, endY, endZ, "EXACT", repeatMode, excludePlayersAbove);
-    }
-
-    private void sendUpdatePacket(BlockPos pos, int seconds, List<Long> selectedPlatforms, List<AnnouncementEntry> announcementEntries, float volume, int range, String attenuationType, boolean boundingBoxEnabled, int startX, int startY, int startZ, int endX, int endY, int endZ, String triggerMode, boolean repeatMode) {
-        sendUpdatePacket(pos, seconds, selectedPlatforms, announcementEntries, volume, range, attenuationType, boundingBoxEnabled, startX, startY, startZ, endX, endY, endZ, triggerMode, repeatMode, false);
-    }
-
-    private void sendUpdatePacket(BlockPos pos, int seconds, List<Long> selectedPlatforms, List<AnnouncementEntry> announcementEntries, float volume, int range, String attenuationType, boolean boundingBoxEnabled, int startX, int startY, int startZ, int endX, int endY, int endZ, String triggerMode, boolean repeatMode, boolean excludePlayersAbove) {
+    private void sendUpdatePacket(BlockPos pos, int seconds, List<Long> selectedPlatforms, List<AnnouncementEntry> announcementEntries, List<AnnouncementEntry> repeatEntries, float volume, int range, String attenuationType, boolean boundingBoxEnabled, int startX, int startY, int startZ, int endX, int endY, int endZ, String triggerMode, boolean excludePlayersAbove, int repeatIntervalSeconds) {
         if (MinecraftClient.getInstance().player == null) {
             return;
         }
@@ -452,17 +545,24 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
         buf.writeInt(seconds);
         buf.writeLongArray(selectedPlatforms.stream().mapToLong(Long::longValue).toArray());
 
-        // Write announcement entries
+        // Write announcement entries (trigger) - MUST use custom writeString to match server
         buf.writeInt(announcementEntries.size());
         for (AnnouncementEntry entry : announcementEntries) {
-            buf.writeString(entry.getJsonName());
+            writeString(buf, entry.getJsonName());
+            buf.writeInt(entry.getDelaySeconds());
+        }
+
+        // Write repeat entries - MUST use custom writeString to match server
+        buf.writeInt(repeatEntries.size());
+        for (AnnouncementEntry entry : repeatEntries) {
+            writeString(buf, entry.getJsonName());
             buf.writeInt(entry.getDelaySeconds());
         }
 
         // Write sound configuration
         buf.writeFloat(volume);
         buf.writeInt(range);
-        buf.writeString(attenuationType);
+        writeString(buf, attenuationType);
 
         // Write bounding box enabled
         buf.writeBoolean(boundingBoxEnabled);
@@ -476,25 +576,33 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
         buf.writeInt(endZ);
 
         // Write trigger mode
-        buf.writeString(triggerMode);
+        writeString(buf, triggerMode);
 
-        // Write repeat mode
-        buf.writeBoolean(repeatMode);
-        
         // Write exclude players above
         buf.writeBoolean(excludePlayersAbove);
 
+        // Write repeat interval seconds
+        buf.writeInt(repeatIntervalSeconds);
+
         ClientPlayNetworking.send(AnnounceSendToClient.ID, buf);
     }
-    
+
+    // Custom writeString that matches server's writeString format
+    private static void writeString(PacketByteBuf buf, String str) {
+        if (str == null) str = "";
+        byte[] bytes = str.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        buf.writeVarInt(bytes.length);
+        buf.writeBytes(bytes);
+    }
+
     // Legacy support method
     private void sendUpdatePacket(BlockPos pos, int seconds, List<Long> selectedPlatforms, String selectedJson) {
         List<AnnouncementEntry> entries = new ArrayList<>();
         if (selectedJson != null && !selectedJson.trim().isEmpty()) {
             entries.add(new AnnouncementEntry(selectedJson, 0));
         }
-        // Use default sound settings and coordinates for legacy calls
-        sendUpdatePacket(pos, seconds, selectedPlatforms, entries, 2.0F, 64, "LINEAR", false, -100, -64, -100, 100, 320, 100, "EXACT", false);
+        int repeatIntervalSeconds = AnnounceReceiveFromServer.calculateRepeatIntervalSeconds(new ArrayList<>());
+        sendUpdatePacket(pos, seconds, selectedPlatforms, entries, new ArrayList<>(), 2.0F, 64, "LINEAR", false, -100, -64, -100, 100, 320, 100, "EXACT", false, repeatIntervalSeconds);
     }
 
     @Override
@@ -504,35 +612,48 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
             autoSave();
             return true;
         }
+        
+        // Arrow key scrolling
+        int maxScrollOffset = Math.max(0, CONTENT_HEIGHT - this.height + 40);
+        if (maxScrollOffset > 0) {
+            if (keyCode == GLFW.GLFW_KEY_UP) {
+                scrollOffset = Math.max(0, scrollOffset - 30);
+                this.init();
+                return true;
+            } else if (keyCode == GLFW.GLFW_KEY_DOWN) {
+                scrollOffset = Math.min(maxScrollOffset, scrollOffset + 30);
+                this.init();
+                return true;
+            }
+        }
+        
         return super.keyPressed(keyCode, scanCode, modifiers);
     }
 
     @Override
-    public void render(MatrixStack matrices, int mouseX, int mouseY, float delta) {
-        this.renderBackground(matrices);
-        super.render(matrices, mouseX, mouseY, delta);
+    public void render(DrawContext context, int mouseX, int mouseY, float delta) {
+        this.renderBackground(context);
+        super.render(context, mouseX, mouseY, delta);
         
         // Draw labels for coordinate fields if they're visible and bounding box is enabled
         AnnounceTile announceTile = getAnnounceTile();
         if (announceTile != null && boundingBoxCheckbox != null) {
-            int buttonWidth = 200;
+            int buttonWidth = Math.min(200, this.width - 40);
             int x = this.width / 2 - buttonWidth / 2;
-            int yStart = 20; // Start much higher on screen
-            int yOffset = 40;
             
-            if (this.height < MIN_SCREEN_HEIGHT) {
-                yStart = 10; // Even smaller top margin when scrolling
-                yOffset = 35;
-            }
+            // Use same dynamic calculation as init()
+            int yOffset = (this.height - 60) / 14;
+            yOffset = Math.max(22, Math.min(yOffset, 30));
+            int yStart = 20;
             
             // Draw "Start Coordinates" label above start coordinate fields
             if (startXField != null && isElementVisible(yStart + 11 * yOffset - scrollOffset - 15, 10)) {
-                this.textRenderer.draw(matrices, Text.translatable("gui.easyannouncement.start_coordinates"), x, yStart + 11 * yOffset - scrollOffset - 15, 0xFFFFFF);
+                context.drawText(textRenderer, Text.translatable("gui.easyannouncement.start_coordinates"), x, yStart + 11 * yOffset - scrollOffset - 15, 0xFFFFFF, true);
             }
 
             // Draw "End Coordinates" label above end coordinate fields
             if (endXField != null && isElementVisible(yStart + 12 * yOffset - scrollOffset - 15, 10)) {
-                this.textRenderer.draw(matrices, Text.translatable("gui.easyannouncement.end_coordinates"), x, yStart + 12 * yOffset - scrollOffset - 15, 0xFFFFFF);
+                context.drawText(textRenderer, Text.translatable("gui.easyannouncement.end_coordinates"), x, yStart + 12 * yOffset - scrollOffset - 15, 0xFFFFFF, true);
             }
         }
     }
@@ -543,15 +664,24 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
     }
 
     public void updateData(int seconds, List<Long> selectedPlatforms, List<AnnouncementEntry> announcementEntries) {
+        updateData(seconds, selectedPlatforms, announcementEntries, new ArrayList<>());
+    }
+
+    public void updateData(int seconds, List<Long> selectedPlatforms, List<AnnouncementEntry> announcementEntries, List<AnnouncementEntry> repeatEntries) {
         this.secondsField.setText(String.valueOf(seconds));
-        this.selectedPlatforms = new ArrayList<>(selectedPlatforms); // コピーを作成
+        this.selectedPlatforms = new ArrayList<>(selectedPlatforms);
+        this.workingTriggerEntries = new ArrayList<>(announcementEntries);
+        this.workingRepeatEntries = new ArrayList<>(repeatEntries);
+
 
         AnnounceTile announceTile = getAnnounceTile();
         if (announceTile != null) {
-            announceTile.setAnnouncementEntries(announcementEntries); // Set entries in tile
-            announceTile.markDirty(); // 追加
-            
-            // Update coordinate fields if they exist
+            announceTile.setSelectedPlatformIds(selectedPlatforms);
+            announceTile.setAnnouncementEntries(announcementEntries);
+            announceTile.setRepeatEntries(repeatEntries);
+            announceTile.setRepeatIntervalSeconds(announceTile.getRepeatIntervalSeconds()); // Already synced via packet, just refresh
+            announceTile.markDirty();
+
             if (startXField != null) startXField.setText(String.valueOf(announceTile.getStartX()));
             if (startYField != null) startYField.setText(String.valueOf(announceTile.getStartY()));
             if (startZField != null) startZField.setText(String.valueOf(announceTile.getStartZ()));
@@ -559,6 +689,12 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
             if (endYField != null) endYField.setText(String.valueOf(announceTile.getEndY()));
             if (endZField != null) endZField.setText(String.valueOf(announceTile.getEndZ()));
         }
+    }
+    
+    // Overloaded method with legacy migration flag
+    public void updateData(int seconds, List<Long> selectedPlatforms, List<AnnouncementEntry> announcementEntries, List<AnnouncementEntry> repeatEntries, boolean needsLegacyMigration) {
+        this.needsLegacyMigration = needsLegacyMigration;
+        updateData(seconds, selectedPlatforms, announcementEntries, repeatEntries);
     }
     
     // Legacy support method
@@ -577,14 +713,14 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
 
     public static List<String> getAvailableJsonFiles() {
         List<String> jsonFiles = new ArrayList<>();
-        
+
         // Load sounds efficiently - only sounds.json and key sound folders
         // This is much faster than scanning all sound files
-        
+
         try {
             net.minecraft.resource.ResourceManager rm = MinecraftClient.getInstance().getResourceManager();
             java.util.Set<String> namespaces = rm.getAllNamespaces();
-            
+
             for (String ns : namespaces) {
                 // Step 1: Load from sounds.json (most important)
                 Identifier soundsJsonId = new Identifier(ns, "sounds.json");
@@ -596,21 +732,44 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
                         parseSoundEventsRecursive(ns, obj, "", jsonFiles);
                     } catch (Exception ignored) {}
                 }
-                
+
                 // Step 2: Only scan sounds folder for common namespaces
                 // Skip scanning all sound files as it's very slow
                 if (ns.equals("minecraft") || ns.equals("mtr")) {
                     try {
                         for (Identifier id : rm.findResources("sounds", path -> {
                             String pathStr = path.getPath().toLowerCase();
-                            return pathStr.endsWith(".ogg") || pathStr.endsWith(".mp3") || 
+                            return pathStr.endsWith(".ogg") || pathStr.endsWith(".mp3") ||
                                    pathStr.endsWith(".wav") || pathStr.endsWith(".flac");
                         }).keySet()) {
                             if (ns.equals(id.getNamespace())) {
                                 String path = id.getPath();
                                 String soundName = path.replace("sounds/", "").replaceAll("\\.(ogg|mp3|wav|flac)$", "");
                                 String namespaced = ns + ":" + soundName;
-                                
+
+                                if (!jsonFiles.contains(namespaced)) {
+                                    jsonFiles.add(namespaced);
+                                }
+                            }
+                        }
+                    } catch (Exception ignored) {}
+                }
+
+                // Step 3: Load JSON sequence files from sounds folder
+                // These are custom announcement JSON files like normalsoon.json, nextstop.json, etc.
+                if (ns.equals("easyannouncement") || ns.equals("mtr")) {
+                    try {
+                        for (Identifier id : rm.findResources("sounds", path -> {
+                            String pathStr = path.getPath().toLowerCase();
+                            // Only match .json files that are NOT sounds.json (the main sounds manifest)
+                            return pathStr.endsWith(".json") && !pathStr.equals("sounds.json");
+                        }).keySet()) {
+                            if (ns.equals(id.getNamespace())) {
+                                String path = id.getPath();
+                                // Extract just the filename without extension and without "sounds/" prefix
+                                String jsonName = path.replace("sounds/", "").replace(".json", "");
+                                String namespaced = ns + ":" + jsonName;
+
                                 if (!jsonFiles.contains(namespaced)) {
                                     jsonFiles.add(namespaced);
                                 }
@@ -620,8 +779,15 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
                 }
             }
         } catch (Exception ignored) {}
-        
+
         return jsonFiles;
+    }
+
+    @Override
+    public void tick() {
+        // Refresh data from AnnounceTile every tick to catch updates from child screens
+        refreshFromTile();
+        super.tick();
     }
     
     /**
@@ -655,6 +821,23 @@ public class MainScreen extends Screen implements ScreenHandlerProvider<MainScre
                     String path = id.getPath();
                     String soundName = path.replace("sounds/", "").replaceAll("\\.(ogg|mp3|wav|flac)$", "");
                     String namespaced = namespace + ":" + soundName;
+                    
+                    if (!sounds.contains(namespaced)) {
+                        sounds.add(namespaced);
+                    }
+                }
+            }
+            
+            // Also scan for JSON sequence files (custom announcement JSONs like normalsoon.json)
+            for (Identifier id : rm.findResources("sounds", path -> {
+                String pathStr = path.getPath().toLowerCase();
+                // Only match .json files that are NOT sounds.json
+                return pathStr.endsWith(".json") && !pathStr.equals("sounds.json");
+            }).keySet()) {
+                if (namespace.equals(id.getNamespace())) {
+                    String path = id.getPath();
+                    String jsonName = path.replace("sounds/", "").replace(".json", "");
+                    String namespaced = namespace + ":" + jsonName;
                     
                     if (!sounds.contains(namespaced)) {
                         sounds.add(namespaced);

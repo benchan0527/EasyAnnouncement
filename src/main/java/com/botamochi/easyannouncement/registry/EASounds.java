@@ -3,9 +3,10 @@ package com.botamochi.easyannouncement.registry;
 import com.botamochi.easyannouncement.Easyannouncement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import net.minecraft.registry.Registries;
+import net.minecraft.registry.Registry;
 import net.minecraft.sound.SoundEvent;
 import net.minecraft.util.Identifier;
-import net.minecraft.util.registry.Registry;
 import org.apache.commons.io.IOUtils;
 
 import java.io.InputStream;
@@ -28,10 +29,9 @@ public class EASounds {
 
             for (String key : soundJson.keySet()) {
                 Identifier id = new Identifier(Easyannouncement.MOD_ID, key);
-                SoundEvent soundEvent = new SoundEvent(id);
+                SoundEvent soundEvent = SoundEvent.of(id);
                 SOUND_EVENTS.put(key, soundEvent);
-                Registry.register(Registry.SOUND_EVENT, id, soundEvent);
-                Easyannouncement.LOGGER.info("Registered default sound: " + id);
+                Registry.register(Registries.SOUND_EVENT, id, soundEvent);
             }
         } catch (Exception e) {
             e.printStackTrace();
@@ -43,6 +43,6 @@ public class EASounds {
     }
 
     public static SoundEvent getSound(Identifier id) {
-        return Registry.SOUND_EVENT.getOrEmpty(id).orElse(null);
+        return Registries.SOUND_EVENT.getOrEmpty(id).orElse(null);
     }
 }

@@ -49,7 +49,9 @@
 	"gui.easyannouncement.copy_failed": "複製失敗",
 	"gui.easyannouncement.clipboard_empty": "剪貼簿為空",
 	"gui.easyannouncement.clipboard_not_text": "剪貼簿內容不是文字",
-	"gui.easyannouncement.repeat_mode": "重複播放（循環）",
+	"gui.easyannouncement.trigger_json_selection": "火車觸發廣播設定",
+	"gui.easyannouncement.repeat_json_selection": "循環廣播設定",
+	"gui.easyannouncement.repeat_interval_input": "循環間隔（秒）",
 	"gui.easyannouncement.exclude_players_above": "排除Block以上既玩家",
 	
 	"announcement.easyannouncement.mtr_time_greeting": "現在時間%s，歡迎來到%s站",

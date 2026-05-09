@@ -1,25 +1,24 @@
 package com.botamochi.easyannouncement.block;
 
 import com.botamochi.easyannouncement.Easyannouncement;
+import com.botamochi.easyannouncement.registry.EATile;
+import com.botamochi.easyannouncement.tile.AnnounceTile;
 import net.minecraft.block.BlockRenderType;
 import net.minecraft.block.BlockState;
+import net.minecraft.block.BlockWithEntity;
+import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.entity.LivingEntity;
+import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.screen.NamedScreenHandlerFactory;
-import net.minecraft.structure.rule.AxisAlignedLinearPosRuleTest;
 import net.minecraft.util.ActionResult;
 import net.minecraft.util.Hand;
 import net.minecraft.util.hit.BlockHitResult;
-import net.minecraft.util.math.AxisTransformation;
-import net.minecraft.world.World;
-import net.minecraft.block.BlockWithEntity;
-import net.minecraft.block.entity.BlockEntity;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.entity.player.PlayerEntity;
-
-import com.botamochi.easyannouncement.tile.AnnounceTile;
+import net.minecraft.world.World;
 
 public class AnnounceBlock extends BlockWithEntity {
+
     public AnnounceBlock(Settings settings) {
         super(settings);
     }
@@ -42,28 +41,23 @@ public class AnnounceBlock extends BlockWithEntity {
 
     @Override
     public BlockEntity createBlockEntity(BlockPos pos, BlockState state) {
-        AnnounceTile announceTile = new AnnounceTile(pos, state);
-
-        // AnnounceTile が設置された位置を登録
-        Easyannouncement.registerAnnounceTilePosition(pos);
-
-        return announceTile;
+        return new AnnounceTile(pos, state);
     }
 
-    // BlockEntity が削除されるときに呼ばれる
     @Override
     public void onBreak(World world, BlockPos pos, BlockState state, PlayerEntity player) {
         BlockEntity blockEntity = world.getBlockEntity(pos);
         if (blockEntity instanceof AnnounceTile) {
-            Easyannouncement.unregisterAnnounceTilePosition(pos);  // AnnounceTile の位置を登録解除
+            Easyannouncement.unregisterAnnounceTilePosition(world, pos);
         }
+        super.onBreak(world, pos, state, player);
     }
 
     @Override
     public void onStateReplaced(BlockState state, World world, BlockPos pos, BlockState newState, boolean moved) {
         if (!state.isOf(newState.getBlock())) {
             if (!world.isClient()) {
-                Easyannouncement.unregisterAnnounceTilePosition(pos);
+                Easyannouncement.unregisterAnnounceTilePosition(world, pos);
             }
             super.onStateReplaced(state, world, pos, newState, moved);
         }
@@ -72,8 +66,5 @@ public class AnnounceBlock extends BlockWithEntity {
     @Override
     public void onPlaced(World world, BlockPos pos, BlockState state, LivingEntity placer, ItemStack itemStack) {
         super.onPlaced(world, pos, state, placer, itemStack);
-        if (!world.isClient()) {
-            Easyannouncement.registerAnnounceTilePosition(pos);
-        }
     }
 }

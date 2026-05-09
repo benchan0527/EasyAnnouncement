@@ -6,7 +6,7 @@ import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gui.screen.Screen;
 import net.minecraft.client.gui.widget.ButtonWidget;
 import net.minecraft.client.gui.widget.TextFieldWidget;
-import net.minecraft.client.util.math.MatrixStack;
+import net.minecraft.client.gui.DrawContext;
 import net.minecraft.text.Text;
 import net.minecraft.util.Identifier;
 import net.minecraft.resource.Resource;
@@ -35,6 +35,8 @@ import java.util.stream.Collectors;
 public class MultiJsonSelectionScreen extends Screen {
     private final AnnounceTile announceTile;
     private final Screen parent;
+    private final Text screenTitle;
+    private final Callback callback;
     private List<AnnouncementEntry> workingEntries;
     private List<String> availableJsonFiles;
     private List<ButtonWidget> entryButtons;
@@ -44,7 +46,11 @@ public class MultiJsonSelectionScreen extends Screen {
     private ButtonWidget cancelButton;
     private boolean draggingScrollbar = false;
     private int scrollOffset = 0;
-    private final int maxVisibleEntries = 5; // Reduced for better spacing
+    private final int maxVisibleEntries = 5;
+
+    public interface Callback {
+        void onSave(List<AnnouncementEntry> entries);
+    }
 
     // Color scheme for modern look
     private static final int BACKGROUND_COLOR = 0x88000000; // Semi-transparent dark
@@ -71,23 +77,28 @@ public class MultiJsonSelectionScreen extends Screen {
         return new int[]{panelX, panelY, panelWidth, panelHeight};
     }
 
-    public MultiJsonSelectionScreen(AnnounceTile announceTile, Screen parent) {
+    public MultiJsonSelectionScreen(AnnounceTile announceTile, Screen parent, List<AnnouncementEntry> entries, Text screenTitle, Callback callback) {
         super(Text.translatable("gui.easyannouncement.multi_json_selection"));
         this.announceTile = announceTile;
         this.parent = parent;
+        this.screenTitle = screenTitle;
+        this.callback = callback;
         this.workingEntries = new ArrayList<>();
-        
-        // Copy current entries from tile
-        for (AnnouncementEntry entry : announceTile.getAnnouncementEntries()) {
+
+        for (AnnouncementEntry entry : entries) {
             this.workingEntries.add(entry.copy());
         }
-        
-        // Ensure at least one empty entry for adding new ones
+
         if (workingEntries.isEmpty()) {
             workingEntries.add(new AnnouncementEntry("", 0));
         }
-        
+
         loadAvailableJsonFiles();
+    }
+
+    // Legacy constructor for backward compatibility
+    public MultiJsonSelectionScreen(AnnounceTile announceTile, Screen parent) {
+        this(announceTile, parent, new ArrayList<>(), Text.translatable("gui.easyannouncement.multi_json_selection"), null);
     }
 
     private void loadAvailableJsonFiles() {
@@ -135,6 +146,29 @@ public class MultiJsonSelectionScreen extends Screen {
                             }
                         }
                     }
+                    
+                    // Step 3: Load JSON sequence files from sounds folder
+                    // These are custom announcement JSON files like normalsoon.json, nextstop.json, etc.
+                    // Check if namespace is easyannouncement or if it's a resource pack namespace
+                    // Also scan mtr namespace for JSON sequence files
+                    if (ns.equals("easyannouncement") || ns.equals("mtr")) {
+                        for (Identifier id : rm.findResources("sounds", path -> {
+                            String pathStr = path.getPath().toLowerCase();
+                            // Only match .json files that are NOT sounds.json (the main sounds manifest)
+                            return pathStr.endsWith(".json") && !pathStr.equals("sounds.json");
+                        }).keySet()) {
+                            if (ns.equals(id.getNamespace())) {
+                                String path = id.getPath();
+                                // Extract just the filename without extension and without "sounds/" prefix
+                                String jsonName = path.replace("sounds/", "").replace(".json", "");
+                                String namespaced = ns + ":" + jsonName;
+                                
+                                if (!availableJsonFiles.contains(namespaced)) {
+                                    availableJsonFiles.add(namespaced);
+                                }
+                            }
+                        }
+                    }
                 } catch (Exception nsError) {
                     // Silently ignore errors for individual namespaces
                 }
@@ -146,7 +180,7 @@ public class MultiJsonSelectionScreen extends Screen {
         // Sort the list for better organization
         availableJsonFiles.sort(String::compareToIgnoreCase);
         
-        System.out.println("[EasyAnnouncement] Loaded " + availableJsonFiles.size() + " sounds from sounds.json");
+        System.out.println("[EasyAnnouncement] Loaded " + availableJsonFiles.size() + " sounds/JSONs from sounds.json and sounds folder");
     }
     
     /**
@@ -304,9 +338,8 @@ public class MultiJsonSelectionScreen extends Screen {
             }
         }
         
-        ButtonWidget jsonButton = new ButtonWidget(panelX + margin, y, jsonButtonWidth, buttonHeight,
-            Text.literal(displayText),
-            button -> openJsonSelector(entryIndex));
+        ButtonWidget jsonButton = ButtonWidget.builder(Text.literal(displayText),
+            button -> openJsonSelector(entryIndex)).dimensions(panelX + margin, y, jsonButtonWidth, buttonHeight).build();
         entryButtons.add(jsonButton);
         addDrawableChild(jsonButton);
         
@@ -320,28 +353,22 @@ public class MultiJsonSelectionScreen extends Screen {
         
         // Remove button with responsive positioning
         int removeX = delayX + delayFieldWidth + elementSpacing;
-        ButtonWidget removeButton = new ButtonWidget(removeX, y, removeButtonWidth, buttonHeight,
-            Text.of("×"),
-            button -> removeEntry(entryIndex));
+        ButtonWidget removeButton = ButtonWidget.builder(Text.of("×"),
+            button -> removeEntry(entryIndex)).dimensions(removeX, y, removeButtonWidth, buttonHeight).build();
         addDrawableChild(removeButton);
     }
         
         // Bottom controls centered to match MainScreen
         int bottomStartY = panelY + panelHeight - 80;
-        addButton = new ButtonWidget(centerX, bottomStartY, buttonWidth, buttonHeight,
-            Text.translatable("gui.easyannouncement.add_entry"),
-            button -> addNewEntry());
+        addButton = ButtonWidget.builder(Text.translatable("gui.easyannouncement.add_entry"),
+            button -> addNewEntry()).dimensions(centerX, bottomStartY, buttonWidth, buttonHeight).build();
         addDrawableChild(addButton);
 
-        saveButton = new ButtonWidget(centerX, bottomStartY + 40, buttonWidth, buttonHeight,
-            Text.translatable("gui.easyannouncement.save"),
-            button -> saveAndClose());
-        addDrawableChild(saveButton);
+        saveButton = ButtonWidget.builder(Text.translatable("gui.easyannouncement.save"),
+            button -> saveAndClose()).dimensions(centerX, bottomStartY + 40, buttonWidth, buttonHeight).build();
 
-        cancelButton = new ButtonWidget(centerX, bottomStartY + 80, buttonWidth, buttonHeight,
-            Text.translatable("gui.easyannouncement.cancel"),
-            button -> close());
-        addDrawableChild(cancelButton);
+        cancelButton = ButtonWidget.builder(Text.translatable("gui.easyannouncement.cancel"),
+            button -> close()).dimensions(centerX, bottomStartY + 80, buttonWidth, buttonHeight).build();
     }
 
     private String getEntryDisplayText(int index) {
@@ -428,15 +455,14 @@ public class MultiJsonSelectionScreen extends Screen {
     }
 
     private void saveAndClose() {
-        // Filter out empty entries
         List<AnnouncementEntry> validEntries = workingEntries.stream()
             .filter(entry -> !entry.isEmpty())
             .collect(Collectors.toList());
-        
-        // Update the tile with the new entries
-        announceTile.setAnnouncementEntries(validEntries);
-        announceTile.markDirty();
-        
+
+        if (callback != null) {
+            callback.onSave(validEntries);
+        }
+
         close();
     }
 
@@ -446,9 +472,9 @@ public class MultiJsonSelectionScreen extends Screen {
     }
 
     @Override
-    public void render(MatrixStack matrices, int mouseX, int mouseY, float delta) {
+    public void render(DrawContext context, int mouseX, int mouseY, float delta) {
         // Simple default background
-        this.renderBackground(matrices);
+        this.renderBackground(context);
         
         // Main panel dimensions - responsive
         int[] panelDims = calculatePanelDimensions();
@@ -458,14 +484,15 @@ public class MultiJsonSelectionScreen extends Screen {
         int panelHeight = panelDims[3];
         
         // Title with modern styling
-        drawCenteredText(matrices, textRenderer, title, width / 2, panelY + 12, 0xFFFFFFFF);
+        Text displayTitle = screenTitle != null ? screenTitle : title;
+        context.drawCenteredTextWithShadow(textRenderer, displayTitle, width / 2, panelY + 12, 0xFFFFFFFF);
         
         // Add labels for better understanding
         String jsonLabel = Text.translatable("gui.easyannouncement.json_files").getString();
         String delayLabel = Text.translatable("gui.easyannouncement.delay_short").getString();
         int labelY = panelY + 30;
         int margin = 20;
-        textRenderer.draw(matrices, jsonLabel, panelX + margin, labelY, 0xFFCCCCCC);
+        context.drawText(textRenderer, jsonLabel, panelX + margin, labelY, 0xFFCCCCCC, false);
         
         // Calculate label positions to match the button layout
         int removeButtonWidthRender = 25;
@@ -476,7 +503,7 @@ public class MultiJsonSelectionScreen extends Screen {
         int minJsonButtonWidthRender = 180;
         int jsonButtonWidthRender = Math.max(minJsonButtonWidthRender, availableWidthForJsonRender);
         int delayX = panelX + margin + jsonButtonWidthRender + elementSpacingRender;
-        textRenderer.draw(matrices, delayLabel, delayX, labelY, 0xFFCCCCCC);
+        context.drawText(textRenderer, delayLabel, delayX, labelY, 0xFFCCCCCC, false);
         
         // Render simple scrollbar if needed
         if (workingEntries.size() > maxVisibleEntries) {
@@ -493,24 +520,24 @@ public class MultiJsonSelectionScreen extends Screen {
                 thumbY = trackTop + (int)Math.round((double)(trackHeight - thumbHeight) * scrollOffset / maxOffset);
             }
             // Track
-            fill(matrices, trackX, trackTop, trackX + 4, trackTop + trackHeight, 0xFF444444);
+            context.fill(trackX, trackTop, trackX + 4, trackTop + trackHeight, 0xFF444444);
             // Thumb
             int thumbColor = draggingScrollbar ? 0xFFAAAAAA : 0xFF888888;
-            fill(matrices, trackX, thumbY, trackX + 4, thumbY + thumbHeight, thumbColor);
+            context.fill(trackX, thumbY, trackX + 4, thumbY + thumbHeight, thumbColor);
         }
         
-        super.render(matrices, mouseX, mouseY, delta);
+        super.render(context, mouseX, mouseY, delta);
     }
     
-    private void drawBorder(MatrixStack matrices, int x, int y, int width, int height, int color) {
+    private void drawBorder(DrawContext context, int x, int y, int width, int height, int color) {
         // Top
-        fill(matrices, x, y, x + width, y + 1, color);
+        context.fill(x, y, x + width, y + 1, color);
         // Bottom  
-        fill(matrices, x, y + height - 1, x + width, y + height, color);
+        context.fill(x, y + height - 1, x + width, y + height, color);
         // Left
-        fill(matrices, x, y, x + 1, y + height, color);
+        context.fill(x, y, x + 1, y + height, color);
         // Right
-        fill(matrices, x + width - 1, y, x + width, y + height, color);
+        context.fill(x + width - 1, y, x + width, y + height, color);
     }
 
     private void setScrollOffset(int newOffset) {

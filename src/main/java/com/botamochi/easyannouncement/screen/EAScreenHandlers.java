@@ -3,9 +3,9 @@ package com.botamochi.easyannouncement.screen;
 import com.botamochi.easyannouncement.tile.AnnounceTile;
 import net.fabricmc.fabric.api.screenhandler.v1.ScreenHandlerRegistry;
 import net.minecraft.block.entity.BlockEntity;
+import net.minecraft.registry.Registries;
 import net.minecraft.screen.ScreenHandlerType;
 import net.minecraft.util.Identifier;
-import net.minecraft.util.registry.Registry;
 
 public class EAScreenHandlers {
     public static ScreenHandlerType<MainScreenHandler> MAIN_SCREEN_HANDLER;

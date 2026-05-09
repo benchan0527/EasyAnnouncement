@@ -25,8 +25,7 @@ public class MainScreenHandler extends ScreenHandler {
     }
 
     @Override
-    public ItemStack transferSlot(PlayerEntity player, int index) {
-        // Implement the method to handle slot transfer
+    public ItemStack quickMove(PlayerEntity player, int index) {
         return ItemStack.EMPTY;
     }
 }

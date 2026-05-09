@@ -49,7 +49,9 @@
   "gui.easyannouncement.copy_failed": "Copy failed",
   "gui.easyannouncement.clipboard_empty": "Clipboard is empty",
   "gui.easyannouncement.clipboard_not_text": "Clipboard content is not text",
-  "gui.easyannouncement.repeat_mode": "Repeat Mode (Loop)",
+  "gui.easyannouncement.trigger_json_selection": "Train Trigger Announcement Setup",
+  "gui.easyannouncement.repeat_json_selection": "Repeat Announcement Setup",
+  "gui.easyannouncement.repeat_interval_input": "Repeat Interval (seconds)",
   "gui.easyannouncement.exclude_players_above": "Exclude Players Above Block",
   
   "announcement.easyannouncement.mtr_time_greeting": "Current time is %s, welcome to %s Station",

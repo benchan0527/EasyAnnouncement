@@ -34,7 +34,9 @@
   "gui.easyannouncement.copy_failed": "コピーに失敗しました",
   "gui.easyannouncement.clipboard_empty": "クリップボードが空です",
   "gui.easyannouncement.clipboard_not_text": "クリップボードの内容がテキストではありません",
-  "gui.easyannouncement.repeat_mode": "リピートモード（ループ）",
+  "gui.easyannouncement.trigger_json_selection": "列車トリガーアナウンス設定",
+  "gui.easyannouncement.repeat_json_selection": "リピートアナウンス設定",
+  "gui.easyannouncement.repeat_interval_input": "リピート間隔（秒）",
   "gui.easyannouncement.exclude_players_above": "ブロック上のプレイヤーを除外",
   
   "announcement.easyannouncement.mtr_time_greeting": "現在時刻は%s、%s駅へようこそ",

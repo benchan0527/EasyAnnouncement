@@ -28,7 +28,17 @@ repositories {
     // See https://docs.gradle.org/current/userguide/declaring_repositories.html
     // for more information about repositories.
     mavenCentral()
-    maven { url = "https://www.cursemaven.com" }
+    exclusiveContent {
+        forRepository {
+            maven {
+                name = "Modrinth"
+                url = "https://api.modrinth.com/maven"
+            }
+        }
+        filter {
+            includeGroup "maven.modrinth"
+        }
+    }
 }
 
 dependencies {
@@ -38,9 +48,8 @@ dependencies {
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
-    modImplementation "curse.maven:minecraft-transit-railway-266707:4505539"
-
-    modImplementation "net.fabricmc.fabric-api:fabric-networking-api-v1:1.0.0+fabric.46cd4c4a"
+    // MTR 4.0 dependency (replaces MTR 3.0)
+    modImplementation "maven.modrinth:minecraft-transit-railway:FABRIC-${project.mtr_version}+${project.minecraft_version}"
 }
 
 processResources {
